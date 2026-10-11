@@ -8,7 +8,13 @@ export async function openDb(file?: string): Promise<Db & { raw: Database }> {
   const raw = file && fs.existsSync(file) ? new SQL.Database(fs.readFileSync(file)) : new SQL.Database();
   let inTx = false;
   const persist = () => { if (file && !inTx) fs.writeFileSync(file, Buffer.from(raw.export())); };
-  for (const f of fs.readdirSync(new URL('./migrations', import.meta.url)).sort()) raw.exec(fs.readFileSync(new URL(`./migrations/${f}`, import.meta.url), 'utf8'));
+  raw.exec('PRAGMA foreign_keys = ON;');
+  // Incremental migrations, tracked like wrangler's d1_migrations table.
+  raw.exec('CREATE TABLE IF NOT EXISTS d1_migrations (name TEXT PRIMARY KEY, applied_at TEXT)');
+  const done = new Set((raw.exec('SELECT name FROM d1_migrations')[0]?.values ?? []).map((r) => String(r[0])));
+  for (const f of fs.readdirSync(new URL('./migrations', import.meta.url)).filter((x) => x.endsWith('.sql')).sort()) {
+    if (done.has(f)) continue; raw.exec(fs.readFileSync(new URL(`./migrations/${f}`, import.meta.url), 'utf8')); raw.run('INSERT INTO d1_migrations VALUES (?, ?)', [f, new Date().toISOString()]);
+  }
   const stmt = (sql: string, args: unknown[] = []): Stmt => ({
     bind: (...v) => stmt(sql, v),
     all: async <T,>() => { const st = raw.prepare(sql); st.bind(args as never); const results: T[] = []; while (st.step()) results.push(st.getAsObject() as T); st.free(); return { results }; },

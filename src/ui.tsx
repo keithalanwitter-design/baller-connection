@@ -1,12 +1,13 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { LifecycleState, Player, Role, Snapshot } from '../shared/domain';
+import type { LifecycleState, Message, Perspective, Player, Snapshot } from '../shared/domain';
 import { relative, shortWhen } from '../shared/time';
-import { LEVELS, clock, family, first, guide, progress, type Guide } from '../shared/workflow';
+import { LEVELS, clock, family, first, guide, progress, userName, type Guide } from '../shared/workflow';
 import { useSnap, useStore } from './store';
 
-export const TRACK: LifecycleState[] = ['Invited', 'Onboarding', 'Plan building', 'Plan set', 'Work ready', 'Submitted', 'Feedback due', 'Next step ready', 'Cycle review'];
+export const TRACK: LifecycleState[] = ['Invited', 'Onboarding', 'Plan building', 'Plan set', 'Work ready', 'Submitted', 'Feedback due', 'Sign-off', 'Next step ready', 'Cycle review'];
 const slug = (x: string) => x.toLowerCase().replace(/[^a-z]+/g, '-');
+export const whoClass = (w: string) => (w === 'head' || w === 'assistant' ? 'coach' : w);
 export function Pill({ state }: { state: string }) { return <span className={`pill st-${slug(state)}`}>{state}</span>; }
 export function Track({ state }: { state: LifecycleState }) {
   const i = TRACK.indexOf(state);
@@ -14,10 +15,10 @@ export function Track({ state }: { state: LifecycleState }) {
 }
 
 /** The persistent “Your path” panel: what’s happening, why, who acts, by when, what unlocks. */
-export function PathPanel({ p, role, compact }: { p: Player; role: Role; compact?: boolean }) {
+export function PathPanel({ p, role, compact }: { p: Player; role: Perspective; compact?: boolean }) {
   const s = useSnap(); const g: Guide = guide(s, p, role);
   return (
-    <section className={`path-panel who-${g.who} ${compact ? 'compact' : ''}`} aria-label="Your path">
+    <section className={`path-panel who-${whoClass(g.who)} ${compact ? 'compact' : ''}`} aria-label="Your path">
       <div className="pp-head"><span className="kicker">{role === 'coach' ? 'Workflow' : 'Your path'}</span><Pill state={g.stage} /></div>
       <p className="pp-what">{g.what}</p>
       <dl className="pp-grid">
@@ -49,16 +50,23 @@ export function JourneyMap({ pid, big }: { pid: string; big?: boolean }) {
   );
 }
 
-export function Thread({ p, me, onSend }: { p: Player; me: 'player' | 'parent' | 'coach'; onSend: (t: string) => void }) {
-  const s = useSnap(); const [t, setT] = useState(''); const msgs = s.messages.filter((m) => m.playerId === p.id).sort((a, b) => a.at.localeCompare(b.at));
-  const who = (f: string) => (f === 'coach' ? 'Coach' : f === 'parent' ? family(s, p).parentName : p.name);
+export function Thread({ p, me, onSend }: { p: Player; me: 'player' | 'parent' | 'coach'; onSend: (t: string, link?: string) => void }) {
+  const s = useSnap(); const { run, as } = useStore(); const [t, setT] = useState(''); const [link, setLink] = useState(''); const [showLink, setShowLink] = useState(false);
+  const msgs = s.messages.filter((m) => m.playerId === p.id).sort((a, b) => a.at.localeCompare(b.at));
+  const unread = msgs.some((m) => as && m.authorId !== as.id && !m.readBy?.[as.id]);
+  useEffect(() => { if (unread) run({ type: 'markRead', playerId: p.id }); }, [unread, p.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const who = (m: Message) => (m.from === 'coach' ? userName(s, m.authorId) : m.from === 'parent' ? family(s, p).parentName : p.name);
+  const seen = (m: Message) => Object.keys(m.readBy ?? {}).filter((u) => u !== m.authorId).map((u) => first(userName(s, u))).filter((n) => n !== 'Unassigned');
   return (
     <div className="thread">
       <ul aria-live="polite">{msgs.length === 0 && <li className="muted">No messages yet.</li>}
-        {msgs.map((m) => <li key={m.id} className={`msg ${m.from === me ? 'mine' : ''} from-${m.from}`}><span className="small muted">{who(m.from)} · {shortWhen(m.at)}{m.from !== 'coach' && !m.answered ? ` · reply due ${m.dueBy ? relative(m.dueBy, clock(s)) : ''}` : ''}</span><p>{m.text}</p></li>)}</ul>
-      <form className="row gap" onSubmit={(e) => { e.preventDefault(); if (t.trim()) { onSend(t.trim()); setT(''); } }}>
-        <label className="sr" htmlFor="msg">Message</label><input id="msg" className="input grow" value={t} onChange={(e) => setT(e.target.value)} placeholder="Write a message" />
-        <button className="btn" disabled={!t.trim()}>Send</button>
+        {msgs.map((m) => <li key={m.id} className={`msg ${m.from === me ? 'mine' : ''} from-${m.from}`}><span className="small muted">{who(m)} · {shortWhen(m.at)}{m.from !== 'coach' && !m.answered ? ` · reply due ${m.dueBy ? relative(m.dueBy, clock(s)) : ''}` : ''}</span><p>{m.text}</p>
+          {m.linkUrl && <a className="attach" href={m.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {m.linkUrl.replace(/^https?:\/\//, '').slice(0, 48)}</a>}
+          {m.from === me && <span className="receipt small">{seen(m).length ? `✓✓ Seen by ${seen(m).join(', ')}` : '✓ Sent'}</span>}</li>)}</ul>
+      <form className="composer" onSubmit={(e) => { e.preventDefault(); if (t.trim()) { onSend(t.trim(), link.trim() || undefined); setT(''); setLink(''); setShowLink(false); } }}>
+        <div className="row gap"><label className="sr" htmlFor="msg">Message</label><input id="msg" className="input grow" value={t} onChange={(e) => setT(e.target.value)} placeholder="Write a message" />
+          <button type="button" className="chip" aria-pressed={showLink} onClick={() => setShowLink(!showLink)} title="Attach a link">🔗 Link</button><button className="btn" disabled={!t.trim()}>Send</button></div>
+        {showLink && <><label className="sr" htmlFor="msglink">Link URL</label><input id="msglink" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://… (a link only. File and film uploads aren’t offered)" /></>}
       </form>
     </div>
   );
@@ -74,14 +82,14 @@ export function Rubric({ p, edit }: { p: Player; edit?: boolean }) {
 /** Proof chain: assignment → player response → coach observation. */
 export function Journal({ p }: { p: Player }) {
   const s = useSnap(); const [f, setF] = useState<'all' | 'approve' | 'retry' | 'waiting'>('all');
-  const rows = s.submissions.filter((x) => x.playerId === p.id).sort((a, b) => b.at.localeCompare(a.at)).map((sub) => ({ sub, a: s.assignments.find((x) => x.id === sub.assignmentId)!, r: s.reviews.find((x) => x.submissionId === sub.id) }))
+  const rows = s.submissions.filter((x) => x.playerId === p.id).sort((a, b) => b.at.localeCompare(a.at)).map((sub) => ({ sub, a: s.assignments.find((x) => x.id === sub.assignmentId)!, r: s.reviews.find((x) => x.submissionId === sub.id && x.status === 'final') }))
     .filter((x) => f === 'all' || (f === 'waiting' ? !x.r : x.r?.decision === f));
   return (<div>
     <div className="seg light" role="group" aria-label="Filter proof chain">{([['all', 'All'], ['approve', 'Approved'], ['retry', 'Another attempt'], ['waiting', 'Awaiting coach']] as const).map(([k, l]) => <button key={k} aria-pressed={f === k} className={f === k ? 'on' : ''} onClick={() => setF(k)}>{l}</button>)}</div>
     {rows.length === 0 && <p className="muted">Nothing here yet.</p>}
     <ol className="chain">{rows.map(({ sub, a, r }) => (
       <li key={sub.id}><div className="row between"><strong>{a.title}</strong><Pill state={r ? (r.decision === 'approve' ? 'Approved' : 'Another attempt') : 'Awaiting coach'} /></div>
-        <div className="links"><div><span className="kicker">Assignment</span><p>{a.reps} sets · {a.minutes} min · {a.cues[0]}</p></div><div><span className="kicker">Response · {shortWhen(sub.at)}</span><p>{sub.repsDone}/{a.reps} sets · “{sub.reflection}”</p></div><div><span className="kicker">Coach observation</span><p>{r?.feedback ?? <span className="muted">Due {relative(sub.dueBy, clock(s))}</span>}</p></div></div></li>))}</ol>
+        <div className="links"><div><span className="kicker">Assignment</span><p>{a.reps} sets · {a.minutes} min · {a.cues[0]}</p></div><div><span className="kicker">Response · {shortWhen(sub.at)}</span><p>{sub.repsDone}/{a.reps} sets · “{sub.reflection}”</p>{sub.linkUrl && <a className="attach" href={sub.linkUrl} target="_blank" rel="noreferrer noopener">🔗 link</a>}</div><div><span className="kicker">Coach observation</span><p>{r?.feedback ?? <span className="muted">Due {relative(sub.dueBy, clock(s))}</span>}</p></div></div></li>))}</ol>
   </div>);
 }
 
@@ -90,7 +98,7 @@ export function Confetti({ n = 26 }: { n?: number }) {
 }
 
 /** Celebrations + “what’s next” sheet after every action. */
-export function Moments({ role, pid }: { role: Role; pid?: string }) {
+export function Moments({ role, pid }: { role: Perspective; pid?: string }) {
   const { last, dismiss } = useStore(); const s = useSnap();
   if (!last || !last.events.some((e) => e.type === 'transition' || e.type === 'milestone')) return null;
   const setOpen = (_: null) => dismiss();
@@ -108,7 +116,7 @@ export function Moments({ role, pid }: { role: Role; pid?: string }) {
         <h2 id="mh" className="display">{headline}</h2>
         {ms.length > 0 && <ul className="msl">{ms.map((m) => <li key={m.id}>★ {m.detail}</li>)}</ul>}
         <div className="whatsnext"><span className="kicker">What’s next</span><p className="strong">{g.what}</p><p className="small">{g.whoLabel} acts next{g.byWhen ? ` · by ${g.byWhen}` : ''}. Unlocks: {g.unlocks}</p></div>
-        <div className="row gap">{g.action && g.action.cmd && g.who !== 'coach' && role !== 'coach' ? <ActionButton g={g} /> : null}<button className="btn ghost" autoFocus onClick={() => setOpen(null)}>Got it</button></div>
+        <div className="row gap">{g.action && g.action.cmd && !['head', 'assistant', 'ops'].includes(g.who) && role !== 'coach' && role !== 'ops' ? <ActionButton g={g} /> : null}<button className="btn ghost" autoFocus onClick={() => setOpen(null)}>Got it</button></div>
       </div>
     </div>
   );
@@ -120,5 +128,18 @@ export function PlayerPicker({ p, base, filter }: { p: Player; base: string; fil
   const s = useSnap(); const nav = useNavigate();
   return <label className="picker small">Viewing <select value={p.id} onChange={(e) => { localStorage.setItem('bc-fam', e.target.value); nav(`${base}?p=${e.target.value}`); }}>{s.players.filter(filter ?? (() => true)).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.state}</option>)}</select></label>;
 }
-export const useFamilyPlayer = (s: Snapshot, q: string | null) => { if (q) localStorage.setItem('bc-fam', q); const id = q || localStorage.getItem('bc-fam') || 'avery'; return s.players.find((p) => p.id === id) ?? s.players[0]; };
+export const useFamilyPlayer = (s: Snapshot, q: string | null): Player | undefined => { if (q) localStorage.setItem('bc-fam', q); const id = q || localStorage.getItem('bc-fam') || 'avery'; return s.players.find((p) => p.id === id) ?? s.players.find((p) => !['Applied', 'Fit review', 'Waitlist'].includes(p.state)) ?? s.players[0]; };
 export const Back = ({ to, children }: { to: string; children: ReactNode }) => <Link to={to} className="back">← {children}</Link>;
+
+const ROLE_LABEL: Record<string, string> = { head: 'Head coach', assistant: 'Assistant coach', ops: 'Ops', parent: 'Parent', player: 'Player' };
+export const inboxPath = (r?: string | null) => (r === 'head' || r === 'assistant' ? '/coach/inbox' : r === 'ops' ? '/ops/inbox' : '/inbox');
+/** Signed-in user, notification bell, sign out. In demo: the current persona. */
+export function UserMenu({ dark }: { dark?: boolean }) {
+  const s = useSnap(); const { as, mode, signOut } = useStore(); const nav = useNavigate(); if (!as) return null;
+  const unread = s.notifications.filter((n) => n.userId === as.id && !n.readAt).length;
+  return <div className={`usermenu ${dark ? 'dark' : ''}`}>
+    <Link to={inboxPath(as.role)} className="bell" aria-label={`Notifications: ${unread} unread`}>🔔{unread > 0 && <b>{unread}</b>}</Link>
+    <span className="small"><b>{as.name}</b><span className="block dim">{ROLE_LABEL[as.role]}{mode === 'demo' ? ' · demo' : ''}</span></span>
+    {mode === 'live' && <button className="link small light" onClick={async () => { await signOut(); nav('/login'); }}>Sign out</button>}
+  </div>;
+}

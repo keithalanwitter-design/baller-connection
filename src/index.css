@@ -158,3 +158,23 @@ code{font-size:.85rem;background:#EEF1F8;padding:1px 6px;border-radius:5px}
 .events{list-style:none;padding:0;margin:16px 0}.ev{display:flex;gap:12px;align-items:baseline;padding:10px 14px;border-radius:10px;margin:6px 0;background:#0F1D45;border:1px solid #2a428a;animation:pop .3s}.ev time{font:700 .78rem Inter;color:var(--lt);white-space:nowrap;min-width:130px}.tr{font-weight:600}
 .cmain .ev{background:#fff;border-color:var(--line)}.cmain .ev time{color:var(--dim)}.logpage .chip.dark{color:#fff}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.court{transform:none}.confetti{display:none}}
+/* ---------- v3: multi-user screens (same tokens, same voice) ---------- */
+.who-tag.head,.who-tag.assistant{background:var(--court);color:#fff}.who-tag.ops{background:#0E7C86;color:#fff}.who-tag.public{background:#E3E8F3}
+.st-sign-off{background:#FFE9B8;color:#6a4500}.st-logged,.st-sent{background:#CFF3E3;color:#0b5a3b}.st-queued{background:#E3E8F3;color:var(--ink)}.st-failed{background:#FFD7D8;color:#7d1418}
+.usermenu{display:flex;align-items:center;gap:10px;color:#fff}.usermenu .block{display:block}.usermenu .dim{color:var(--lt)}.side .usermenu{margin-top:auto;flex-wrap:wrap}
+.bell{position:relative;text-decoration:none;font-size:1.15rem;background:#ffffff14;border-radius:10px;padding:5px 8px}.bell b{position:absolute;top:-6px;right:-6px;background:var(--orange);color:var(--ink);border-radius:999px;font:800 .7rem Inter;padding:2px 6px}
+.owner{font:700 .74rem Inter;color:var(--court);background:#E8EEFF;border-radius:6px;padding:2px 7px}.qwhy{margin-top:2px}.qrow .sla.soft{background:#F2F4F9;color:var(--dim)}
+.bill{font-weight:700;border-radius:6px;padding:1px 6px}.b-unpaid{background:#FFE9B8;color:#6a4500}.b-paid{background:#CFF3E3;color:#0b5a3b}.b-comp{background:#E7DDFF;color:#3d2384}
+.trow.r5{grid-template-columns:1.3fr auto 1.4fr 1fr 80px}@media(max-width:780px){.trow.r5{grid-template-columns:1fr auto}}
+.teamgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.tcard{border-top:6px solid var(--blue)}.tcard.late{border-top-color:var(--red)}.stats.light b{color:var(--court)}.stats.light{grid-template-columns:repeat(3,1fr)}.stats.light span{color:var(--dim);font-size:.8rem}
+.setrow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px dashed var(--line)}.setrow .input{max-width:90px;margin:0}
+.nlist{list-style:none;padding:0}.nitem{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#fff;margin:8px 0}.nitem a{text-decoration:none;color:inherit}.nitem.unread{border-left:6px solid var(--orange);background:#FFF7F2}.nitem.t-overdue.unread{border-left-color:var(--red);background:#FFF5F5}.nicon{font-size:1.3rem}
+.appshell .nitem{background:#0F1D45;border-color:#2a428a;color:#fff}.appshell .nitem.unread{background:#1a2a5c}.appshell .nitem .dim{color:var(--lt)}
+.attach{display:inline-block;margin-top:4px;font:600 .82rem Inter;color:var(--blue);word-break:break-all}.appshell .attach{color:var(--sky)}.receipt{display:block;text-align:right;color:var(--dim);margin-top:2px}.appshell .receipt{color:var(--lt)}
+.composer{display:flex;flex-direction:column;gap:8px}
+.mail{padding:0}.mailrow{width:100%;background:none;border:0;padding:12px 14px;text-align:left;cursor:pointer;font:inherit;align-items:center}.mailbody{white-space:pre-wrap;margin:0;padding:12px 14px;border-top:1px solid var(--line);font:500 .85rem/1.5 ui-monospace,monospace;background:#F7F9FD}
+.calrow{padding:8px 0;border-bottom:1px dashed var(--line);align-items:center}.sticky{position:sticky;top:16px}.drill .cues{margin:6px 0}
+.authcard{max-width:480px;margin:0 auto}.authcard form{display:flex;flex-direction:column;gap:6px;margin:12px 0}.errtext{color:#ffb3b5;font-weight:700}.check{display:flex;gap:10px;align-items:center;margin:10px 0;font-weight:600}.consent{font-size:.92rem}
+.chip.danger{border-color:#E5484D;color:#E5484D}.appshell .chip{background:transparent;color:#fff;border-color:#ffffff40}.appshell .chip.danger{color:#ffb3b5;border-color:#ffb3b5}
+.signoff{border-left:6px solid var(--sun)}.panel.left,.timeline.left{text-align:left}
+.stats.light>div{background:#F2F4F9;border:1px solid var(--line);color:var(--ink)}.signoff label{display:block;margin-top:8px}.teamgrid+.panel .row .input,.panel form .row .input{flex:1;min-width:160px}

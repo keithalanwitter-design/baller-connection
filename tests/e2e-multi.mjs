@@ -1,0 +1,106 @@
+// Multi-user e2e against the local backend (Node + SQLite adapter, same handler as the Worker).
+// Each persona is its own browser context with its own httpOnly session cookie.
+// Run: npm run serve:local (PORT=8799) then BASE=http://localhost:8799/baller-connection/ node tests/e2e-multi.mjs
+import { chromium } from 'playwright';
+const B = process.env.BASE || 'http://localhost:8799/baller-connection/'; const API = new URL(B).origin;
+const b = await chromium.launch({ executablePath: process.env.CHROME }); const errs = [];
+const ok = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); console.log('  ✓', m); };
+async function persona(name, w = 1280) {
+  const ctx = await b.newContext({ viewport: { width: w, height: 880 } }); const pg = await ctx.newPage();
+  pg.on('pageerror', (e) => errs.push(`${name}: ${e.message}`)); pg.on('dialog', (d) => d.accept());
+  const go = async (h) => { await pg.goto(B + '#' + h); await pg.waitForTimeout(450); };
+  const shot = (n, full = true) => pg.screenshot({ path: `shots/${n}.png`, fullPage: full });
+  const gotIt = async () => { await pg.waitForTimeout(250); const g = pg.getByRole('button', { name: 'Got it' }); if (await g.count()) await g.click(); };
+  const api = (path) => pg.evaluate((p) => fetch(p, { credentials: 'include' }).then((r) => r.json()), path);
+  const login = async (id, secret, pin = false) => { await go('/login'); if (pin) await pg.getByRole('tab', { name: 'Player' }).click(); await pg.fill('#lg', id); await pg.fill('#pw', secret); await pg.getByRole('button', { name: 'Sign in' }).click(); await pg.waitForTimeout(700); };
+  return { ctx, pg, go, shot, gotIt, api, login };
+}
+const cookies = async (p) => (await p.ctx.cookies(API)).find((c) => c.name === 'bc_session');
+
+// 0 · Live build: no demo bar; app routes require sign-in
+const visitor = await persona('visitor');
+await visitor.go('/coach'); await visitor.pg.waitForURL(/#\/login/, { timeout: 15000 }); ok(/#\/login/.test(visitor.pg.url()), 'live mode: /coach redirects to sign-in'); ok(await visitor.pg.locator('.demobar').count() === 0, 'live mode: no demo bar');
+await visitor.shot('20-login', false);
+// 1 · Family applies publicly
+await visitor.go('/apply'); await visitor.pg.fill('#pn', 'Kai Rook'); await visitor.pg.fill('#pp', 'Lou Rook'); await visitor.pg.fill('#pe', 'lou@family.test'); await visitor.pg.getByRole('button', { name: 'Continue' }).click();
+for (const t of ['13–14', '3–4 days', 'Both of us', 'Plan + regular feedback']) { await visitor.pg.getByRole('radio', { name: t }).click(); await visitor.pg.waitForTimeout(220); }
+await visitor.pg.fill('#t', 'Finish with my left hand'); await visitor.pg.getByRole('button', { name: 'See my result' }).click();
+await visitor.pg.getByRole('button', { name: 'Submit application' }).click(); await visitor.pg.getByText('Application in').waitFor(); ok(true, 'public application submitted');
+
+// 2 · Ops: queue → assign assistant → invite
+const ops = await persona('ops'); await ops.login('ops@demo.test', 'demo-pass-123');
+ok(/#\/ops/.test(ops.pg.url()), 'ops lands on the Ops queue'); const oc = await cookies(ops); ok(oc?.httpOnly && oc.sameSite === 'Lax', 'session cookie is httpOnly + SameSite=Lax');
+ok(await ops.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'New application' }).count() === 1, 'ops queue: Kai is a New application');
+ok(await ops.pg.locator('.qrow', { hasText: 'Sam Quill' }).filter({ hasText: 'Payment' }).count() === 1, 'ops queue: unpaid billing item');
+await ops.shot('21-ops-queue');
+await ops.pg.locator('.qrow', { hasText: 'Kai Rook' }).click(); await ops.pg.waitForTimeout(400);
+await ops.pg.getByLabel('Assigned coach').selectOption('u_asst'); await ops.pg.waitForTimeout(400);
+await ops.pg.getByRole('button', { name: 'Send invite' }).click(); await ops.gotIt(); await ops.pg.waitForTimeout(400);
+const out = await ops.api('/api/outbox'); const inviteMail = out.find((m) => m.to === 'lou@family.test' && m.kind === 'invite'); ok(inviteMail && inviteMail.status === 'logged', 'invite email went through the provider (dev log)');
+const token = inviteMail.body.match(/token=([a-f0-9]+)/)[1]; const code = inviteMail.body.match(/code (\d{6})/)[1]; ok(token.length === 48 && code.length === 6, 'invite has a tokenized link + 6-digit backup code');
+await ops.go('/ops/outbox'); await ops.pg.locator('.mailrow').first().click(); await ops.shot('22-outbox', false);
+
+// 3 · Parent accepts via link, creates account, onboarding + consent, sets player PIN
+const parent = await persona('parent', 1100); await parent.go(`/invite?token=${token}`);
+await parent.pg.fill('#ipn', 'Lou Rook'); await parent.pg.fill('#ie', 'lou@family.test'); await parent.pg.fill('#ipw', 'kai-is-great-1'); await parent.shot('23-invite-accept', false);
+await parent.pg.getByRole('button', { name: /Accept invite/ }).click(); await parent.pg.waitForURL(/welcome/); ok(!!(await cookies(parent)), 'parent account created + signed in');
+await parent.pg.getByRole('radio', { name: 'Wing' }).click(); await parent.pg.getByRole('button', { name: 'Continue' }).click();
+await parent.pg.fill('#g', 'Finish with my left hand'); await parent.pg.getByRole('button', { name: 'Continue' }).click();
+await parent.pg.getByRole('radio', { name: 'Watch, then try' }).click(); await parent.pg.getByRole('button', { name: 'Continue' }).click();
+await parent.pg.getByRole('radio', { name: '3 days a week' }).click(); await parent.pg.getByRole('radio', { name: 'After school' }).click(); await parent.pg.getByRole('button', { name: 'Continue' }).click();
+ok(await parent.pg.getByRole('button', { name: /Agree & finish/ }).isDisabled(), 'cannot finish without consent');
+await parent.pg.fill('#gn', 'Lou Rook'); await parent.pg.getByRole('checkbox').check(); await parent.shot('24-consent', false);
+await parent.pg.getByRole('button', { name: /Agree & finish/ }).click(); await parent.pg.getByText('Welcome, Kai.').waitFor(); ok(true, 'consent recorded → onboarding complete');
+await parent.pg.getByLabel('Player username').fill('kai.rook'); await parent.pg.getByLabel('PIN').fill('4321'); await parent.pg.getByRole('button', { name: 'Save login' }).click(); await parent.pg.getByText(/can sign in as/).waitFor(); ok(true, 'parent issued player username + PIN');
+
+// 4 · Assistant: Activation → Plan needed in *their* queue → publish from a template
+const asst = await persona('assistant'); await asst.login('assistant@demo.test', 'demo-pass-123');
+ok(await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Plan needed' }).count() === 1, 'routed: Kai’s Plan needed is in the assistant’s queue');
+ok(await asst.pg.locator('.qrow', { hasText: 'Avery Pine' }).count() === 0, 'routed: head coach’s players are not in the assistant queue');
+await asst.go('/coach/library'); await asst.pg.fill('#dt', 'Mikan drill'); await asst.pg.getByLabel('Cue 1').fill('Soft touch off the glass'); await asst.pg.getByRole('button', { name: 'Add to library' }).click(); await asst.pg.waitForTimeout(400);
+ok(await asst.pg.locator('.drill', { hasText: 'Mikan drill' }).count() === 1, 'coach adds a drill to the library');
+await asst.go('/coach/plan/' + (await asst.api('/api/snapshot')).snapshot.players.find((p) => p.name === 'Kai Rook').id);
+await asst.pg.getByRole('button', { name: /Weak-hand starter/ }).click(); await asst.pg.getByRole('button', { name: /Mikan drill/ }).click();
+await asst.pg.getByRole('button', { name: 'Publish plan' }).click(); await asst.gotIt(); ok(true, 'assistant published Kai’s plan from a template + library drill');
+
+// 5 · Player (PIN login, no email) unlocks rep 1 and submits with a link
+const player = await persona('player', 430); await player.login('kai.rook', '4321', true); ok(/#\/app/.test(player.pg.url()), 'player signs in with username + PIN');
+await player.pg.getByRole('button', { name: /Read my focus/ }).click(); await player.gotIt();
+for (let i = 1; i <= 3; i++) await player.pg.getByRole('button', { name: `Set ${i}`, exact: true }).click();
+await player.pg.fill('#refl', 'Left hand felt better by set three.'); await player.pg.fill('#rlink', 'https://example.com/my-clip');
+await player.pg.getByRole('button', { name: 'Submit to coach' }).click(); await player.gotIt(); ok(await player.pg.locator('.sla-clock').count() === 1, 'player sees reply-by clock after submitting');
+
+// 6 · Assistant reviews → Sign-off (family can’t see it yet)
+await asst.go('/coach'); await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Work ready' }).click(); await asst.pg.waitForTimeout(300);
+await asst.pg.fill('#fb', 'Good tempo. Next: same speed, eyes on the rim.'); await asst.pg.getByRole('button', { name: /^Approve/ }).click(); await asst.gotIt();
+await player.pg.reload(); await player.pg.waitForTimeout(600); ok(/head coach finalizing/i.test(await player.pg.locator('main').innerText()), 'player sees “head coach finalizing” (same Sign-off state)');
+
+// 7 · Head coach: inbox + sign-off queue item, signs off with an edit
+const head = await persona('head'); await head.login('head@demo.test', 'demo-pass-123');
+await head.go('/coach/inbox'); ok(await head.pg.locator('.nitem', { hasText: 'Sign-off needed' }).count() >= 1, 'head coach notified: sign-off needed'); await head.shot('25-inbox', false);
+await head.go('/coach'); ok(await head.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Sign-off' }).count() === 1, 'Sign-off routed to the head coach queue'); await head.shot('26-head-action-center');
+await head.pg.locator('.qrow', { hasText: 'Kai Rook' }).click(); await head.pg.waitForTimeout(300); await head.shot('27-signoff', false);
+await head.pg.fill('#ed', 'Good tempo. Next: same speed, eyes on the rim, finish high.'); await head.pg.getByRole('button', { name: /Sign off with edits/ }).click(); await head.gotIt();
+
+// 8 · Player sees the next step + notification
+await player.pg.reload(); await player.pg.waitForTimeout(700); const today = await player.pg.locator('main').innerText();
+ok(/New coach feedback is in/i.test(today) && /finish high/.test(today), 'player sees Next step ready + the signed-off feedback'); await player.shot('28-player-next-step');
+ok((await player.api('/api/notifications')).some((n) => n.type === 'feedback_ready'), 'player has a feedback_ready notification');
+
+// 9 · Digest: coach approves, parent sees it + account/privacy tools
+await asst.go('/coach/digest'); await asst.pg.locator('.panel', { hasText: 'Kai Rook' }).getByRole('button', { name: /Approve/ }).click(); await asst.pg.waitForTimeout(400);
+await parent.go('/parent'); await parent.pg.waitForTimeout(800); const pv = await parent.pg.locator('main').innerText();  ok(/weekly note/i.test(pv) && /Kai is on a/.test(pv), 'parent sees the approved digest');
+ok(/Consent/i.test(pv) && /Given by Lou Rook/.test(pv), 'parent sees the timestamped consent record'); await parent.shot('29-parent-digest');
+ok((await parent.api('/api/outbox')).error, 'parent is denied the outbox (403)');
+
+// 10 · Head coach screens: team, library, settings, audit
+await head.go('/coach/team'); ok(await head.pg.locator('.tcard').count() === 3, 'team view shows 3 staff'); ok(/Reassigned .* → Jamie Reed/.test(await head.pg.locator('main').innerText()), 'handoff appears on team view'); await head.shot('30-team');
+await head.go('/coach/library'); await head.shot('31-library');
+await head.go('/coach/settings'); await head.pg.getByRole('checkbox').uncheck(); await head.pg.getByRole('button', { name: 'Save settings' }).click(); await head.pg.getByText('Saved ✓').waitFor(); await head.pg.getByRole('checkbox').check(); await head.pg.getByRole('button', { name: 'Save settings' }).click(); await head.shot('32-settings');
+await head.go('/coach/calendar'); await head.shot('33-calendar');
+await head.go('/coach/audit'); ok(/consent/i.test(await head.pg.locator('main').innerText()), 'audit log has the consent record'); await head.shot('34-audit');
+await ops.go('/ops/team'); await ops.shot('35-ops-team');
+// sign out
+await player.pg.getByRole('button', { name: 'Sign out' }).click(); await player.pg.waitForURL(/login/); ok(!(await cookies(player)), 'sign out clears the session');
+
+if (errs.length) throw new Error(errs.join('\n')); console.log('E2E MULTI OK'); await b.close();

@@ -20,8 +20,8 @@ export default function Apply() {
   const [i, setI] = useState(0); const [a, setA] = useState<Record<string, string>>({ player: '', parent: '' }); const [done, setDone] = useState<string | null>(null);
   const q = QS[i]; const res = i >= QS.length ? suggestTier(a) : null;
   const pick = (v: string) => { setA({ ...a, [q.id]: v }); setTimeout(() => setI(i + 1), 140); };
-  const submit = async (next: 'apply' | 'call' | 'waitlist') => { if (await run({ type: 'submitApplication', playerName: a.player.trim(), parentName: a.parent.trim(), answers: a, next })) setDone(next); };
-  const textOk = q?.text === 'names' ? a.player.trim().split(' ').length >= 2 && a.parent.trim().length > 1 : (a[q?.id] || '').trim().length > 2;
+  const submit = async (next: 'apply' | 'call' | 'waitlist') => { if (await run({ type: 'submitApplication', playerName: a.player.trim(), parentName: a.parent.trim(), email: a.email?.trim(), answers: a, next })) setDone(next); };
+  const textOk = q?.text === 'names' ? a.player.trim().split(' ').length >= 2 && a.parent.trim().length > 1 && /^\S+@\S+\.\S+$/.test(a.email ?? '') : (a[q?.id] || '').trim().length > 2;
   return (
     <main id="main" tabIndex={-1} className="flow">
       <div className="flowtop"><Logo light /><Link to="/" className="small dim">Exit</Link></div>
@@ -59,7 +59,8 @@ export default function Apply() {
             {q.opts ? <div className="opts" role="radiogroup" aria-labelledby="qh">{q.opts.map((o) => <button key={o} role="radio" aria-checked={a[q.id] === o} className={`opt ${a[q.id] === o ? 'on' : ''}`} onClick={() => pick(o)}>{o}</button>)}</div>
               : <form onSubmit={(e) => { e.preventDefault(); if (textOk) setI(i + 1); }}>
                 {q.text === 'names' ? <><label htmlFor="pn">Player’s full name</label><input id="pn" autoFocus className="input" value={a.player} placeholder="e.g. Casey Rowan (demo: use an invented name)" onChange={(e) => setA({ ...a, player: e.target.value })} />
-                  <label htmlFor="pp">Parent or guardian name</label><input id="pp" className="input" value={a.parent} onChange={(e) => setA({ ...a, parent: e.target.value })} /></>
+                  <label htmlFor="pp">Parent or guardian name</label><input id="pp" className="input" value={a.parent} onChange={(e) => setA({ ...a, parent: e.target.value })} />
+                  <label htmlFor="pe">Parent email (where the invite goes)</label><input id="pe" className="input" type="email" autoComplete="email" value={a.email ?? ''} onChange={(e) => setA({ ...a, email: e.target.value })} /></>
                   : <><label className="sr" htmlFor="t">{q.q}</label><input id="t" autoFocus className="input" value={a[q.id] || ''} onChange={(e) => setA({ ...a, [q.id]: e.target.value })} placeholder="Type here" /></>}
                 <button className="btn" disabled={!textOk}>{i === QS.length - 1 ? 'See my result' : 'Continue'}</button>
               </form>}

@@ -1,7 +1,7 @@
 {
   "name": "baller-connection",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,14 @@
     "test": "vitest run",
     "test:e2e": "node tests/e2e.mjs",
     "api": "tsx server/node.ts",
-    "typecheck": "tsc -b && tsc -p tsconfig.server.json"
+    "typecheck": "tsc -b && tsc -p tsconfig.server.json",
+    "build:live": "tsc -b && VITE_API_URL=same-origin vite build --outDir dist-live",
+    "build:worker": "tsc -b && BASE=/ VITE_API_URL=same-origin vite build",
+    "serve:local": "npm run build:live && DIST=dist-live tsx server/node.ts",
+    "test:e2e:multi": "node tests/e2e-multi.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply baller-connection --local",
+    "db:migrate:remote": "wrangler d1 migrations apply baller-connection --remote",
+    "deploy": "npm run build:worker && wrangler deploy"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -31,6 +38,7 @@
     "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "wrangler": "^4.149.0"
   }
 }

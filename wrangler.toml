@@ -1,12 +1,28 @@
-name = "baller-connection-api"
+# Baller Connection v3: Worker API + static app + D1 + cron. See DEPLOY.md.
+name = "baller-connection"
 main = "server/worker.ts"
 compatibility_date = "2026-10-01"
 
+# The built SPA (npm run build:worker) is served by the same Worker, so session cookies are first-party.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
 [vars]
-ALLOW_ORIGIN = "https://keithalanwitter-design.github.io"
+APP_URL = "https://baller-connection.YOUR-SUBDOMAIN.workers.dev"
+EMAIL_PROVIDER = "log"          # log | resend | postmark
+EMAIL_FROM = "Baller Connection <coach@YOUR-DOMAIN>"
+DEMO = "0"
+# Secrets (never in this file): wrangler secret put SESSION_SECRET / EMAIL_API_KEY
 
 [[d1_databases]]
 binding = "DB"
 database_name = "baller-connection"
 database_id = "REPLACE_WITH_ID_FROM_wrangler_d1_create"
 migrations_dir = "server/migrations"
+
+[triggers]
+# every 15 min: SLA / overdue sweep + notification email digest. Sunday 23:00 UTC: weekly parent digests.
+crons = ["*/15 * * * *", "0 23 * * SUN"]

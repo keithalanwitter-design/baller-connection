@@ -2,23 +2,24 @@ import { useState } from 'react';
 import { Link, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
 import { Logo } from '../App';
 import { useSnap, useStore } from '../store';
-import { HABITS, TIERS, type Player } from '../../shared/domain';
+import { HABITS, type Player } from '../../shared/domain';
 import { isoDay, relative, shortWhen } from '../../shared/time';
-import { clock, first, lastReview, lastSubmission, openAssignment, playerAssignments, playerCycle, progress } from '../../shared/workflow';
-import { JourneyMap, Journal, Moments, PathPanel, PlayerPicker, Rubric, Thread, Track, useFamilyPlayer } from '../ui';
+import { clock, first, tierReply, userName, lastReview, lastSubmission, openAssignment, playerAssignments, playerCycle, progress } from '../../shared/workflow';
+import { JourneyMap, Journal, Moments, PathPanel, PlayerPicker, Rubric, Thread, Track, UserMenu, useFamilyPlayer } from '../ui';
 
 function CheckIn({ p }: { p: Player }) {
   const s = useSnap(); const { run } = useStore(); const a = openAssignment(s, p.id)!;
-  const [reps, setReps] = useState<boolean[]>(() => Array(a.reps).fill(false)); const [r, setR] = useState(''); const [busy, setBusy] = useState(false);
+  const [reps, setReps] = useState<boolean[]>(() => Array(a.reps).fill(false)); const [r, setR] = useState(''); const [link, setLink] = useState(''); const [busy, setBusy] = useState(false);
   const done = reps.filter(Boolean).length;
   return (
-    <form className="checkin" onSubmit={async (e) => { e.preventDefault(); setBusy(true); await run({ type: 'submitRep', playerId: p.id, repsDone: done, reflection: r }); setBusy(false); }}>
+    <form className="checkin" onSubmit={async (e) => { e.preventDefault(); setBusy(true); await run({ type: 'submitRep', playerId: p.id, repsDone: done, reflection: r, linkUrl: link.trim() || undefined }); setBusy(false); }}>
       <p className="strong">1 · Tap each set you finished</p>
       <div className="reps">{reps.map((v, i) => <button type="button" key={i} aria-pressed={v} aria-label={`Set ${i + 1}`} className={`rep ${v ? 'on' : ''}`} onClick={() => setReps(reps.map((x, j) => (j === i ? !x : x)))}>{v ? '✓' : i + 1}</button>)}</div>
       <div className="repbar" aria-hidden><i style={{ width: `${(done / a.reps) * 100}%` }} /></div>
       <label htmlFor="refl" className="strong">2 · One honest sentence: what happened?</label>
       <textarea id="refl" className="input" rows={2} maxLength={240} value={r} onChange={(e) => setR(e.target.value)} placeholder="Lost it on the switch twice, better when I stayed low." />
-      <div className="row between"><span className="small dim">{done}/{a.reps} sets · coach replies {TIERS[p.tier].replyLabel}</span><button className="btn lg" disabled={busy || !done || r.trim().length < 5}>Submit to coach</button></div>
+      <label htmlFor="rlink" className="small dim">Optional link (e.g. a clip you host elsewhere). We don’t take uploads or review full game film.</label><input id="rlink" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://" />
+      <div className="row between"><span className="small dim">{done}/{a.reps} sets · coach replies {tierReply(s, p)}</span><button className="btn lg" disabled={busy || !done || r.trim().length < 5}>Submit to coach</button></div>
     </form>
   );
 }
@@ -33,8 +34,8 @@ function RepCard({ p }: { p: Player }) {
     <p className="meta">{a.reps} sets · {a.minutes} min · Focus: {cyc?.focus}</p>
     {retry && <blockquote className="quote sm">{rev!.feedback}</blockquote>}
     <ul className="cues">{a.cues.map((c) => <li key={c}>{c}</li>)}</ul><CheckIn p={p} /></>;
-  else if ((p.state === 'Submitted' || p.state === 'Feedback due') && sub) body = <>
-    <p className="kicker orange">Waiting on coach</p><h2 className="display">Submitted ✓</h2>
+  else if ((p.state === 'Submitted' || p.state === 'Feedback due' || p.state === 'Sign-off') && sub) body = <>
+    <p className="kicker orange">{p.state === 'Sign-off' ? 'Feedback written · head coach finalizing' : `Waiting on ${first(userName(s, p.coachId))}`}</p><h2 className="display">Submitted ✓</h2>
     <p>{s.assignments.find((x) => x.id === sub.assignmentId)?.title} · {sub.repsDone} sets · “{sub.reflection}”</p>
     <div className="sla-clock"><span>Coach replies by</span><b>{shortWhen(sub.dueBy)}</b><span className="small">{relative(sub.dueBy, clock(s))}</span></div>
     <p className="small dim">While you wait: knock out today’s habits. {queued.length ? `${queued.length} more rep${queued.length > 1 ? 's' : ''} in this cycle.` : 'This is the last rep of the cycle.'}</p></>;
@@ -94,16 +95,17 @@ function Progress({ p }: { p: Player }) {
 }
 
 export function PlayerShell() {
-  const s = useSnap(); const [sp] = useSearchParams(); const p = useFamilyPlayer(s, sp.get('p')); const { run } = useStore();
+  const s = useSnap(); const [sp] = useSearchParams(); const p = useFamilyPlayer(s, sp.get('p')); const { run, mode, as } = useStore();
+  if (!p) return <main className="appmain"><p>No player on this account yet.</p></main>;
   const tabs = [['/app', 'Today', '◎'], ['/app/development', 'Develop', '▲'], ['/app/messages', 'Messages', '✉'], ['/app/progress', 'Progress', '★']];
-  const unread = s.messages.filter((m) => m.playerId === p.id && m.from === 'coach').length;
+  const unread = s.messages.filter((m) => m.playerId === p.id && m.from === 'coach' && !(as && m.readBy?.[as.id])).length;
   return (
     <div className="appshell hardwood">
-      <header className="apph"><Logo light /><div className="row gap"><PlayerPicker p={p} base="/app" /><Link className="small link light" to={`/parent?p=${p.id}`}>Parent view</Link></div></header>
+      <header className="apph"><Logo light /><div className="row gap">{(mode === 'demo' || s.players.length > 1) && <PlayerPicker p={p} base="/app" />}{(mode === 'demo' || as?.role === 'parent') && <Link className="small link light" to={`/parent?p=${p.id}`}>Parent view</Link>}<UserMenu /></div></header>
       <main id="main" tabIndex={-1} className="appmain">
         <Routes>
           <Route index element={<Today p={p} />} /><Route path="development" element={<Development p={p} />} />
-          <Route path="messages" element={<><h1 className="display">Messages</h1><p className="small dim">Coach replies {TIERS[p.tier].replyLabel}. Every message gets a reply-by time.</p><Thread p={p} me="player" onSend={(t) => run({ type: 'sendMessage', playerId: p.id, from: 'player', text: t })} /></>} />
+          <Route path="messages" element={<><h1 className="display">Messages</h1><p className="small dim">Coach replies {tierReply(s, p)}. Every message gets a reply-by time.</p><Thread p={p} me="player" onSend={(t, l) => run({ type: 'sendMessage', playerId: p.id, text: t, linkUrl: l })} /></>} />
           <Route path="progress" element={<Progress p={p} />} />
         </Routes>
       </main>
