@@ -1,121 +1,114 @@
 import { useState } from 'react';
 import { Link, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
 import { Logo } from '../App';
-import { HABITS, current, priorRetry, first, replyBy, streak, today, useStore, type Player } from '../store';
-import { Journal, Pill, Rubric, StatusTrack, Thread } from './shared';
+import { useSnap, useStore } from '../store';
+import { HABITS, TIERS, type Player } from '../../shared/domain';
+import { isoDay, relative, shortWhen } from '../../shared/time';
+import { clock, first, lastReview, lastSubmission, openAssignment, playerAssignments, playerCycle, progress } from '../../shared/workflow';
+import { JourneyMap, Journal, Moments, PathPanel, PlayerPicker, Rubric, Thread, Track, useFamilyPlayer } from '../ui';
 
-export function useFamilyPlayer() {
-  const { s } = useStore(); const [sp] = useSearchParams();
-  const q = sp.get('p'); if (q) localStorage.setItem('bc-fam', q);
-  const id = q || localStorage.getItem('bc-fam') || 'avery';
-  return s.players.find((p) => p.id === id) || s.players[0];
-}
-export function FamilyPicker({ p, base }: { p: Player; base: string }) {
-  const { s } = useStore();
-  return <label className="picker small">Viewing <select value={p.id} onChange={(e) => { localStorage.setItem('bc-fam', e.target.value); location.hash = `#${base}?p=${e.target.value}`; }}>{s.players.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>;
-}
-
-function CheckIn({ p, onDone }: { p: Player; onDone: () => void }) {
-  const { update } = useStore(); const a = current(p)!;
-  const [reps, setReps] = useState<boolean[]>(Array(a.reps).fill(false)); const [r, setR] = useState('');
+function CheckIn({ p }: { p: Player }) {
+  const s = useSnap(); const { run } = useStore(); const a = openAssignment(s, p.id)!;
+  const [reps, setReps] = useState<boolean[]>(() => Array(a.reps).fill(false)); const [r, setR] = useState(''); const [busy, setBusy] = useState(false);
   const done = reps.filter(Boolean).length;
-  const submit = () => {
-    update(p.id, (pl) => ({ ...pl, status: 'Submitted', assignments: pl.assignments.map((x) => x.id === a.id ? { ...x, state: 'submitted', repsDone: done, reflection: r.trim(), submittedAt: new Date().toISOString() } : x) }));
-    onDone();
-  };
   return (
-    <form className="checkin pop" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <p className="strong">Tap each set you finished</p>
+    <form className="checkin" onSubmit={async (e) => { e.preventDefault(); setBusy(true); await run({ type: 'submitRep', playerId: p.id, repsDone: done, reflection: r }); setBusy(false); }}>
+      <p className="strong">1 · Tap each set you finished</p>
       <div className="reps">{reps.map((v, i) => <button type="button" key={i} aria-pressed={v} aria-label={`Set ${i + 1}`} className={`rep ${v ? 'on' : ''}`} onClick={() => setReps(reps.map((x, j) => (j === i ? !x : x)))}>{v ? '✓' : i + 1}</button>)}</div>
-      <label htmlFor="refl" className="strong">One honest sentence: what happened?</label>
+      <div className="repbar" aria-hidden><i style={{ width: `${(done / a.reps) * 100}%` }} /></div>
+      <label htmlFor="refl" className="strong">2 · One honest sentence: what happened?</label>
       <textarea id="refl" className="input" rows={2} maxLength={240} value={r} onChange={(e) => setR(e.target.value)} placeholder="Lost it on the switch twice, better when I stayed low." />
-      <div className="row between"><span className="small muted">{done}/{a.reps} sets · {r.length}/240</span><button className="btn" disabled={!done || r.trim().length < 5}>Submit to coach</button></div>
+      <div className="row between"><span className="small dim">{done}/{a.reps} sets · coach replies {TIERS[p.tier].replyLabel}</span><button className="btn lg" disabled={busy || !done || r.trim().length < 5}>Submit to coach</button></div>
     </form>
   );
 }
 
-function NextRep({ p }: { p: Player }) {
-  const { update } = useStore(); const [open, setOpen] = useState(false); const a = current(p);
-  const last = [...p.assignments].reverse().find((x) => x.feedback); const retry = priorRetry(p, a);
+function RepCard({ p }: { p: Player }) {
+  const s = useSnap(); const a = openAssignment(s, p.id); const rev = lastReview(s, p.id); const sub = lastSubmission(s, p.id); const cyc = playerCycle(s, p.id);
+  const retry = a && a.status === 'open' && rev?.decision === 'retry' && s.assignments.find((x) => x.id === s.submissions.find((y) => y.id === rev.submissionId)?.assignmentId)?.title === a.title;
+  const queued = playerAssignments(s, p.id).filter((x) => x.status === 'queued');
   let body;
-  if (p.status === 'Invited' || p.status === 'Connected') body = <><h2>Finish setting up</h2><p>Five quick screens and your coach can build your plan.</p><Link className="btn" to="/welcome">Continue setup</Link></>;
-  else if (p.status === 'Active' || p.status === 'Plan set' || !a && p.status !== 'Next step ready') body = <><h2>Your plan is on the way</h2><p>Your coach is building your first focus. It arrives by <strong>{replyBy()}</strong>. Until then: knock out today’s habits below.</p></>;
-  else if (p.status === 'Next step ready') body = <><h2>New feedback is in</h2><blockquote className="quote">{last?.feedback}</blockquote><button className="btn" onClick={() => update(p.id, (x) => ({ ...x, status: 'Work ready' }))}>Start next rep →</button></>;
-  else if (a && a.state === 'submitted') body = <><h2>Submitted ✓</h2><p><strong>{a.title}</strong> · {a.repsDone}/{a.reps} sets. Your coach replies by <strong>{replyBy(a.submittedAt)}</strong>.</p><p className="muted">Nice work. Keep the streak going below.</p></>;
-  else if (a) body = <>
-    <p className="eyebrow">{retry ? 'Another attempt · coach note' : 'Assigned by your coach'}</p>
-    <h2>{a.title}</h2>
-    <p className="meta">{a.reps} sets · {a.minutes} min · Focus: {p.focus}</p>
-    {retry && <blockquote className="quote sm">{retry.feedback}</blockquote>}
-    <ul className="cues">{a.cues.map((c) => <li key={c}>{c}</li>)}</ul>
-    {open ? <CheckIn p={p} onDone={() => setOpen(false)} /> : <button className="btn lg" onClick={() => setOpen(true)}>Log practice</button>}
-  </>;
-  return <section className="card nextrep" aria-labelledby="nr"><p id="nr" className="eyebrow gold">Your next rep</p>{body}</section>;
+  if (p.state === 'Work ready' && a) body = <>
+    <p className="kicker orange">{retry ? 'Another attempt · coach cue' : 'Your next rep'}</p><h2 className="display">{a.title}</h2>
+    <p className="meta">{a.reps} sets · {a.minutes} min · Focus: {cyc?.focus}</p>
+    {retry && <blockquote className="quote sm">{rev!.feedback}</blockquote>}
+    <ul className="cues">{a.cues.map((c) => <li key={c}>{c}</li>)}</ul><CheckIn p={p} /></>;
+  else if ((p.state === 'Submitted' || p.state === 'Feedback due') && sub) body = <>
+    <p className="kicker orange">Waiting on coach</p><h2 className="display">Submitted ✓</h2>
+    <p>{s.assignments.find((x) => x.id === sub.assignmentId)?.title} · {sub.repsDone} sets · “{sub.reflection}”</p>
+    <div className="sla-clock"><span>Coach replies by</span><b>{shortWhen(sub.dueBy)}</b><span className="small">{relative(sub.dueBy, clock(s))}</span></div>
+    <p className="small dim">While you wait: knock out today’s habits. {queued.length ? `${queued.length} more rep${queued.length > 1 ? 's' : ''} in this cycle.` : 'This is the last rep of the cycle.'}</p></>;
+  else if (p.state === 'Next step ready' && rev) body = <><p className="kicker orange">Coach feedback</p><h2 className="display">Approved ✓</h2><blockquote className="quote">{rev.feedback}</blockquote><p className="small dim">{queued.length ? `Up next: ${queued[0].title}` : 'That was the last rep. Next: your cycle wrap-up.'}</p></>;
+  else if (p.state === 'Plan set') body = <><p className="kicker orange">New plan · Cycle {cyc?.index}</p><h2 className="display">{cyc?.focus}</h2><ol className="planlist">{queued.map((x) => <li key={x.id}>{x.title} <span className="dim small">· {x.reps} sets</span></li>)}</ol></>;
+  else if (p.state === 'Cycle review') body = <><p className="kicker orange">Cycle {cyc?.index} complete</p><h2 className="display">You finished the cycle.</h2><p>Coach is re-rating your rubric and picking the next focus.</p></>;
+  else return null;
+  return <section id="rep" className={`repcard rc-${p.state.replace(/ /g, '-').toLowerCase()}`}>{body}</section>;
 }
 
 function Habits({ p }: { p: Player }) {
-  const { update } = useStore(); const k = `${today()}`; const st = streak(p.habits);
-  const [checked, setChecked] = useState<string[]>(() => JSON.parse(localStorage.getItem(`bc-h-${p.id}-${k}`) || '[]'));
-  const toggle = (h: string) => {
-    const n = checked.includes(h) ? checked.filter((x) => x !== h) : [...checked, h]; setChecked(n); localStorage.setItem(`bc-h-${p.id}-${k}`, JSON.stringify(n));
-    update(p.id, (x) => ({ ...x, habits: n.length === HABITS.length ? Array.from(new Set([...x.habits, k])) : x.habits.filter((d) => d !== k) }));
-  };
+  const s = useSnap(); const { run } = useStore(); const d = isoDay(clock(s)); const pr = progress(s, p.id);
+  const on = (k: string) => s.habits.some((h) => h.playerId === p.id && h.date === d && h.key === k);
+  const week = Array.from({ length: 7 }, (_, i) => { const x = clock(s); x.setDate(x.getDate() - (6 - i)); const iso = isoDay(x); return { iso, n: s.habits.filter((h) => h.playerId === p.id && h.date === iso).length, label: x.toLocaleDateString('en-US', { weekday: 'narrow' }) }; });
   return (
-    <section className="card"><div className="row between"><h3>Daily habits</h3><span className="streak" aria-label={`${st} day streak`}>🔥 {st}-day streak</span></div>
-      <div className="habits">{HABITS.map((h) => <button key={h} aria-pressed={checked.includes(h)} className={`habit ${checked.includes(h) ? 'on' : ''}`} onClick={() => toggle(h)}>{checked.includes(h) ? '✓ ' : ''}{h}</button>)}</div>
-      <p className="small muted">All three today keeps the streak alive.</p></section>
+    <section id="habits" className="habitcard">
+      <div className="row between"><h3 className="display">Daily habits</h3><span className={`flame ${pr.streak >= 3 ? 'hot' : ''}`} aria-label={`${pr.streak} day streak`}>🔥 {pr.streak}</span></div>
+      <div className="habits">{HABITS.map((h) => <button key={h} aria-pressed={on(h)} className={`habit ${on(h) ? 'on' : ''}`} onClick={() => run({ type: 'toggleHabit', playerId: p.id, key: h })}>{on(h) ? '✓ ' : '+ '}{h}</button>)}</div>
+      <ol className="week" aria-label="Last 7 days">{week.map((w) => <li key={w.iso} className={w.n >= 3 ? 'full' : w.n ? 'part' : ''}><i /><span>{w.label}</span></li>)}</ol>
+      <p className="small dim">All three in a day keeps the streak. 7 days in a row helps unlock Level 5.</p>
+    </section>
   );
 }
 
 function Today({ p }: { p: Player }) {
-  const last = [...p.assignments].reverse().find((x) => x.feedback);
-  const sub = current(p);
-  const line = p.status === 'Submitted' || p.status === 'Feedback due' ? `Coach replies by ${replyBy(sub?.submittedAt)}` : p.status === 'Active' ? `Plan arrives by ${replyBy()}` : `Next live check-in ${new Date(p.nextSession + 'T12:00').toLocaleDateString('en-US', { weekday: 'short' })}`;
+  const s = useSnap(); const pr = progress(s, p.id); const rev = lastReview(s, p.id);
   return (<>
-    <div className="hello"><h1>Hey {first(p.name)}.</h1><p className="statusline"><Pill status={p.status} /> <span>{line}</span></p><StatusTrack status={p.status} /></div>
-    <NextRep p={p} />
+    <div className="hello"><div><p className="kicker">Level {pr.level} · {pr.name}</p><h1 className="display">Hey {first(p.name)}.</h1></div><span className={`flame big ${pr.streak >= 3 ? 'hot' : ''}`} aria-label={`${pr.streak} day streak`}>🔥{pr.streak}</span></div>
+    <Track state={p.state} />
+    <PathPanel p={p} role="player" />
+    <RepCard p={p} />
+    <JourneyMap pid={p.id} />
     <Habits p={p} />
-    {last && p.status !== 'Next step ready' && last !== priorRetry(p, sub) && <section className="card"><p className="eyebrow">Latest coach feedback</p><p className="strong">{last.title}</p><blockquote className="quote sm">{last.feedback}</blockquote><Link to="/app/development" className="link">See your proof chain →</Link></section>}
+    {rev && p.state !== 'Next step ready' && !(p.state === 'Work ready' && rev.decision === 'retry') && <section className="fbcard"><p className="kicker">Latest coach feedback</p><blockquote className="quote sm">{rev.feedback}</blockquote><Link to="/app/development" className="link">See your proof chain →</Link></section>}
   </>);
 }
 
 function Development({ p }: { p: Player }) {
+  const s = useSnap(); const cyc = playerCycle(s, p.id);
   return (<>
-    <h1>Development</h1>
-    <section className="card"><p className="eyebrow">Current focus</p><h2>{p.focus || 'Coming with your first plan'}</h2><p className="muted">Season goal: {p.goal || '—'}</p></section>
-    <section className="card"><h3>Skill rubric</h3><p className="small muted">1 = learning it · 3 = reliable in practice · 5 = reliable in games</p><Rubric r={p.rubric} /></section>
-    <section><h3>Proof chain</h3><p className="small muted">Each entry links the assignment, your response, and what the coach saw.</p><Journal p={p} /></section>
+    <h1 className="display">Development</h1>
+    <section className="focuscard"><p className="kicker orange">Current focus{cyc ? ` · Cycle ${cyc.index}` : ''}</p><h2 className="display">{cyc?.focus || 'Coming with your first plan'}</h2><p className="dim">Season goal: {p.goal || '—'}</p></section>
+    <section className="panel"><h3 className="display">Skill rubric</h3><p className="small dim">1 = learning it · 3 = reliable in practice · 5 = reliable in games. Re-rated every cycle.</p><Rubric p={p} /></section>
+    <section><h3 className="display">Proof chain</h3><p className="small dim">Each entry links the assignment, your response and what the coach saw.</p><Journal p={p} /></section>
   </>);
 }
 
-export function badges(p: Player) {
-  const sub = p.assignments.filter((a) => a.submittedAt).length, ok = p.assignments.filter((a) => a.state === 'approved').length, st = streak(p.habits);
-  return [['First check-in', sub >= 1], ['3-day streak', st >= 3], ['7-day streak', st >= 7], ['First approval', ok >= 1], ['Honest retry', p.assignments.some((a) => a.state === 'retry')], ['5 approvals', ok >= 5]] as [string, boolean][];
-}
 function Progress({ p }: { p: Player }) {
-  const b = badges(p); const sub = p.assignments.filter((a) => a.submittedAt).length;
+  const s = useSnap(); const pr = progress(s, p.id); const ms = s.milestones.filter((m) => m.playerId === p.id);
+  const ALL = ['First check-in', 'First approval', 'Honest retry', '3-day streak', '7-day streak', '14-day streak', 'Cycle 1 complete', 'Cycle 2 complete'];
   return (<>
-    <h1>Progress</h1>
-    <div className="stats"><div className="card"><b>{streak(p.habits)}</b><span>day streak</span></div><div className="card"><b>{sub}</b><span>check-ins</span></div><div className="card"><b>{p.assignments.filter((a) => a.state === 'approved').length}</b><span>approved</span></div></div>
-    <section className="card"><h3>Badges</h3><ul className="badges">{b.map(([n, on]) => <li key={n} className={on ? 'on' : ''}><span aria-hidden>{on ? '★' : '☆'}</span>{n}<span className="sr">{on ? ' earned' : ' not yet'}</span></li>)}</ul></section>
+    <h1 className="display">Progress</h1>
+    <div className="stats"><div><b>{pr.streak}</b><span>day streak</span></div><div><b>{pr.subs}</b><span>check-ins</span></div><div><b>{pr.approved}</b><span>approved</span></div><div><b>{pr.cycles}</b><span>cycles</span></div></div>
+    <JourneyMap pid={p.id} big />
+    <section className="panel"><h3 className="display">Badges</h3><ul className="badges">{ALL.map((n) => { const m = ms.find((x) => x.key === n); return <li key={n} className={m ? 'on' : ''}><span aria-hidden>{m ? '★' : '☆'}</span>{n}<span className="sr">{m ? ' earned' : ' not yet'}</span>{m && <small>{shortWhen(m.at)}</small>}</li>; })}</ul></section>
   </>);
 }
 
 export function PlayerShell() {
-  const p = useFamilyPlayer(); const { update } = useStore();
-  const tabs = [['/app', 'Today'], ['/app/development', 'Development'], ['/app/messages', 'Messages'], ['/app/progress', 'Progress']];
+  const s = useSnap(); const [sp] = useSearchParams(); const p = useFamilyPlayer(s, sp.get('p')); const { run } = useStore();
+  const tabs = [['/app', 'Today', '◎'], ['/app/development', 'Develop', '▲'], ['/app/messages', 'Messages', '✉'], ['/app/progress', 'Progress', '★']];
+  const unread = s.messages.filter((m) => m.playerId === p.id && m.from === 'coach').length;
   return (
-    <div className="appshell">
-      <header className="apph"><Logo /><div className="row gap"><FamilyPicker p={p} base="/app" /><Link className="small link" to="/parent">Parent view</Link></div></header>
+    <div className="appshell hardwood">
+      <header className="apph"><Logo light /><div className="row gap"><PlayerPicker p={p} base="/app" /><Link className="small link light" to={`/parent?p=${p.id}`}>Parent view</Link></div></header>
       <main id="main" tabIndex={-1} className="appmain">
         <Routes>
-          <Route index element={<Today p={p} />} />
-          <Route path="development" element={<Development p={p} />} />
-          <Route path="messages" element={<><h1>Messages</h1><p className="muted small">Your coach replies within the window on your plan.</p><Thread p={p} me="player" onSend={(t) => update(p.id, (x) => ({ ...x, messages: [...x.messages, { from: 'player', text: t, at: new Date().toISOString() }] }))} /></>} />
+          <Route index element={<Today p={p} />} /><Route path="development" element={<Development p={p} />} />
+          <Route path="messages" element={<><h1 className="display">Messages</h1><p className="small dim">Coach replies {TIERS[p.tier].replyLabel}. Every message gets a reply-by time.</p><Thread p={p} me="player" onSend={(t) => run({ type: 'sendMessage', playerId: p.id, from: 'player', text: t })} /></>} />
           <Route path="progress" element={<Progress p={p} />} />
         </Routes>
       </main>
-      <nav className="tabbar" aria-label="Player">{tabs.map(([to, l]) => <NavLink key={to} to={to} end>{l}</NavLink>)}</nav>
+      <nav className="tabbar" aria-label="Player">{tabs.map(([to, l, ic]) => <NavLink key={to} to={to} end><span aria-hidden>{ic}</span>{l}{l === 'Messages' && unread > 0 && <i className="dotn" aria-hidden />}</NavLink>)}</nav>
+      <Moments role="player" pid={p.id} />
     </div>
   );
 }
