@@ -3,7 +3,9 @@ import { Logo } from '../App';
 import { useSnap, useStore } from '../store';
 import { weekKey } from '../../shared/time';
 import { clock, family, first, playerCycle, progress } from '../../shared/workflow';
-import { JourneyMap, Moments, PathPanel, PlayerPicker, Thread, Track, UserMenu, useFamilyPlayer } from '../ui';
+import { Moments, PathPanel, PlayerPicker, Track, UserMenu, useFamilyPlayer } from '../ui';
+import { CoachKnows, CycleReviewPlayer, PromiseCard, UnifiedInbox } from '../v4';
+import { plainFeedback } from '../../shared/personal';
 import { useEffect, useState } from 'react';
 import { shortWhen } from '../../shared/time';
 import { userName } from '../../shared/workflow';
@@ -54,9 +56,11 @@ export default function Parent() {
         <div className="stats"><div><b>{assigned.length}</b><span>reps this cycle</span></div><div><b>{subs.length}</b><span>done this week</span></div><div><b>{pr.streak}</b><span>day streak</span></div><div><b>L{pr.level}</b><span>{pr.name}</span></div></div>
         <section className="panel"><h3 className="display">Coach’s weekly note</h3>{digest ? <blockquote className="quote sm">{digest.text}</blockquote> : <p className="dim">The coach approves this week’s summary on Sunday.</p>}</section>
         <section className="panel"><h3 className="display">This cycle{cyc ? `: ${cyc.focus}` : ''}</h3>{assigned.length === 0 ? <p className="dim">No work assigned yet.</p> :
-          <ul className="plain">{assigned.map((a) => { const r = s.reviews.find((x) => x.status === 'final' && s.submissions.find((y) => y.id === x.submissionId)?.assignmentId === a.id); return <li key={a.id}><strong>{a.title}</strong> — {({ queued: 'up later', open: 'to do now', submitted: 'done, awaiting coach', approved: 'approved ✓', retry: 'coach asked for another attempt' })[a.status]}{r && <p className="small dim">Coach: {r.feedback}</p>}</li>; })}</ul>}</section>
-        <JourneyMap pid={p.id} />
-        <section className="panel"><h3 className="display">Message the coach</h3><Thread p={p} me="parent" onSend={(t, l) => run({ type: 'sendMessage', playerId: p.id, text: t, linkUrl: l })} /></section>
+          <ul className="plain">{assigned.map((a) => { const r = s.reviews.find((x) => x.status === 'final' && s.submissions.find((y) => y.id === x.submissionId)?.assignmentId === a.id); return <li key={a.id}><strong>{a.title}</strong> — {({ queued: 'up later', open: 'to do now', submitted: 'done, awaiting coach', approved: 'approved ✓', retry: 'coach asked for another attempt', logged: 'done (logged)' })[a.status]}{r && <p className="small dim">{r.wentWell ? plainFeedback(p, r) : `Coach: ${r.feedback}`}</p>}</li>; })}</ul>}</section>
+        <PromiseCard p={p} />
+        <section className="panel" id="messages"><h3 className="display">Messages & updates</h3><p className="small dim">Pick a type: General, Schedule change, or Urgent (injury or a same-day change: {s.settings.urgentReplyHours} office hours, head coach alerted).</p><UnifiedInbox players={[p]} me="parent" fixedPlayer /></section>
+        <CycleReviewPlayer p={p} me="parent" />
+        <CoachKnows p={p} />
         <Account p={p} />
         <p className="small dim">No coaching homework for you. {canPause && <button className="link small" onClick={() => run({ type: 'pause', playerId: p.id })}>Pause plan</button>}</p>
       </main>

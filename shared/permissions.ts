@@ -19,10 +19,12 @@ export const COMMAND_ROLES: Record<CommandType, Role[]> = {
   scheduleSession: ['head', 'assistant', 'ops'], cancelSession: ['head', 'assistant', 'ops'],
   updateSettings: H, inviteStaff: H, markNotificationsRead: ['head', 'assistant', 'ops', 'parent', 'player'],
   requestData: ['parent'], completeDataRequest: OPS,
+  reactFeedback: FAMILY, weeklyReflection: FAMILY, updateAboutMe: FAMILY, cycleReflection: FAMILY, setTournament: ['parent', 'player', 'head', 'assistant'],
+  completeCycleReview: COACH, adjustPlan: COACH, approveDigests: COACH,
   sweep: ['system'], generateDigests: ['system', 'head'], advanceClock: ['system'],
 };
 /** Commands an assistant may only run on players assigned to them. */
-const ASSIGNED_ONLY: CommandType[] = ['publishPlan', 'review', 'updateCanvas', 'rateSkill', 'approveDigest', 'sendMessage', 'markRead', 'scheduleSession'];
+const ASSIGNED_ONLY: CommandType[] = ['publishPlan', 'review', 'updateCanvas', 'rateSkill', 'approveDigest', 'sendMessage', 'markRead', 'scheduleSession', 'completeCycleReview', 'adjustPlan', 'setTournament'];
 
 export class PermissionError extends Error {}
 const pid = (c: Command): string | undefined => ('playerId' in c ? (c as { playerId?: string }).playerId : undefined);
@@ -53,10 +55,10 @@ export function scopeSnapshot(s: Snapshot, a: Actor): Snapshot {
     families: s.families.filter((f) => players.some((p) => p.familyId === f.id)),
     players: players.map((p) => (coaching ? p : { ...p, canvas: '' })),
     applications: a.role === 'ops' ? s.applications : by(s.applications),
-    invites: by(s.invites).map((i) => (a.role === 'ops' ? i : { ...i, token: '', code: '' })),
+    invites: by(s.invites).map((i) => (a.role === 'ops' ? i : { ...i, tokenHash: '', codeHash: '' })),
     consents: by(s.consents), cycles: by(s.cycles), assignments: by(s.assignments), submissions: by(s.submissions),
     reviews: by(s.reviews).filter((r) => !family || r.status === 'final'),
-    messages: a.role === 'ops' ? [] : by(s.messages), habits: by(s.habits), milestones: by(s.milestones),
+    messages: a.role === 'ops' ? [] : by(s.messages), reflections: by(s.reflections), cycleReviews: by(s.cycleReviews), habits: by(s.habits), milestones: by(s.milestones),
     digests: by(s.digests).filter((d) => !family || d.status === 'approved'),
     meetings: s.meetings.filter((m) => (m.playerId ? ids.has(m.playerId) : a.role === 'ops' || m.staffId === a.id)),
     drills: family || a.role === 'ops' ? s.drills.filter(() => !family) : s.drills, templates: coaching ? s.templates : [],

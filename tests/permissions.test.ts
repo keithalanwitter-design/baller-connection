@@ -11,7 +11,7 @@ const ACTORS: Record<string, Actor> = {
 // One representative command per type, aimed at Avery (head-coached, Pine family).
 const SAMPLE: Command[] = [
   { type: 'startFitReview', playerId: 'avery' }, { type: 'createInvite', playerId: 'avery' }, { type: 'assignCoach', playerId: 'avery', coachId: 'u_asst' }, { type: 'setBilling', playerId: 'avery', billing: 'paid' },
-  { type: 'recordConsent', playerId: 'avery', guardianName: 'Dana Pine', agreed: true }, { type: 'publishPlan', playerId: 'avery', focus: 'x', drillIds: ['d1'] }, { type: 'review', playerId: 'avery', decision: 'approve', feedback: 'good job' },
+  { type: 'recordConsent', playerId: 'avery', guardianName: 'Dana Pine', agreed: true }, { type: 'publishPlan', playerId: 'avery', focus: 'x', drillIds: ['d1'] }, { type: 'review', playerId: 'avery', decision: 'approve', wentWell: 'good job', adjust: 'Keep eyes up', why: 'It builds control' },
   { type: 'signOff', playerId: 'avery', approve: true }, { type: 'submitRep', playerId: 'avery', repsDone: 1, reflection: 'did it' }, { type: 'toggleHabit', playerId: 'avery', key: 'x' }, { type: 'sendMessage', playerId: 'avery', text: 'hi' },
   { type: 'updateCanvas', playerId: 'avery', canvas: 'x' }, { type: 'saveDrill', drill: { title: 'x', reps: 1, minutes: 1, cues: [], tags: [] } }, { type: 'updateSettings', patch: { capacity: 20 } }, { type: 'requestData', playerId: 'avery', kind: 'export' },
   { type: 'completeDataRequest', requestId: 'x' }, { type: 'pause', playerId: 'avery' }, { type: 'sweep' }, { type: 'submitApplication', playerName: 'a', parentName: 'b', answers: {}, next: 'apply' }, { type: 'inviteStaff', name: 'x', email: 'x@y.z', role: 'ops' },
@@ -26,10 +26,10 @@ describe('command permission matrix (every role × command)', () => {
   it('parents and players are scoped to their own family/player', () => {
     expect(canRun(s, { id: 'u_jo', role: 'parent', familyId: 'f_quill' }, { type: 'pause', playerId: 'avery' })).not.toBe(true);
     expect(canRun(s, { id: 'u_nia', role: 'player', playerId: 'nia' }, { type: 'toggleHabit', playerId: 'avery', key: 'x' })).not.toBe(true);
-    expect(canRun(s, ACTORS.assistant, { type: 'review', playerId: 'riley', decision: 'approve', feedback: 'good job' })).toBe(true);
+    expect(canRun(s, ACTORS.assistant, { type: 'review', playerId: 'riley', decision: 'approve', wentWell: 'good job', adjust: 'Keep eyes up', why: 'It builds control' })).toBe(true);
   });
   it('read scoping hides other families, coach notes and unsigned reviews', () => {
-    const p = scopeSnapshot(s, ACTORS.parent); expect(p.players.map((x) => x.id)).toEqual(['avery']); expect(p.players[0].canvas).toBe(''); expect(p.outbox).toEqual([]); expect(p.invites.every((i) => !i.token));
+    const p = scopeSnapshot(s, ACTORS.parent); expect(p.players.map((x) => x.id)).toEqual(['avery']); expect(p.players[0].canvas).toBe(''); expect(p.outbox).toEqual([]); expect(p.invites.every((i) => !i.tokenHash));
     const a = scopeSnapshot(s, ACTORS.assistant); expect(a.players.every((x) => x.coachId === 'u_asst')).toBe(true);
     const o = scopeSnapshot(s, ACTORS.ops); expect(o.messages).toEqual([]); expect(o.players.every((x) => x.canvas === '')).toBe(true);
   });
@@ -48,7 +48,7 @@ describe('HTTP endpoint matrix with real sessions', () => {
     const env = await makeEnv(); const parent = await login(env, 'dana@demo.test'); const asst = await login(env, 'assistant@demo.test'); const player = await login(env, 'avery.pine', '1234', true);
     expect((await parent.cmd({ type: 'updateSettings', patch: { capacity: 99 } })).status).toBe(403);
     expect((await parent.cmd({ type: 'pause', playerId: 'riley' })).status).toBe(403);
-    expect((await asst.cmd({ type: 'review', playerId: 'avery', decision: 'approve', feedback: 'nice one' })).status).toBe(403);
+    expect((await asst.cmd({ type: 'review', playerId: 'avery', decision: 'approve', wentWell: 'nice one', adjust: 'Keep eyes up', why: 'It builds control' })).status).toBe(403);
     expect((await asst.cmd({ type: 'setBilling', playerId: 'riley', billing: 'paid' })).status).toBe(403);
     expect((await player.cmd({ type: 'sweep' })).status).toBe(403);
     expect((await player.cmd({ type: 'toggleHabit', playerId: 'avery', key: 'Handles 10 min' })).status).toBe(200);

@@ -1,4 +1,4 @@
-# Baller Connection v3
+# Baller Connection v4
 
 **One focus. One next rep. A coach who answers.**
 
@@ -6,6 +6,14 @@ Keith Witter's virtual player-development program, rebuilt as a multi-user produ
 
 - **Live demo (GitHub Pages):** https://keithalanwitter-design.github.io/baller-connection/ This build runs the same engine in your browser on fictional data. The demo bar switches between **Player · Parent · Head coach · Assistant · Ops**.
 - **Real product:** the same app served by a Cloudflare Worker with D1, sessions and cron. See **[DEPLOY.md](DEPLOY.md)**.
+
+## What's new in v4
+- **Promise ledger**: every landing-page promise is in `shared/promises.ts`, enforced by one test each, and listed in [PROMISES.md](PROMISES.md) (`npx tsx scripts/gen-promises.ts`). Families see a "What you can count on" card. Promises at risk show up in the coach queue.
+- **Unified feedback**: Went well / Adjust / Why / Next rep / optional link. 👍 or ❓ reactions; a ❓ opens a thread and a Reply needed queue item.
+- **Unified inbox**: threads with a context (rep, feedback, schedule, gameplan, urgent), office hours, reply-by times, and quick and saved replies.
+- **Weekly rhythm**: Monday plan drop, Wednesday midweek check, Friday wrap reflection, Sunday parent digest. Each cycle is 4 weeks and ends in a cycle review.
+- **Simpler**: player nav is Today / Develop / Inbox / Progress, with one primary action per screen. Coaches press **N** for the next item and can batch approve.
+- **Security**: invite tokens and codes are stored as SHA-256 hashes, and rev-checked edits return a 409 on a conflict.
 
 ## Roles
 | Role | Lands on | Owns |
@@ -56,7 +64,7 @@ shared/  domain.ts (types, Command union) · engine.ts (dispatch) · workflow.ts
 server/  app.ts (HTTP handler: auth, endpoints, cron) · repo.ts (row-level diff writes + targeted queries) · schema.ts (column map)
          auth.ts (PBKDF2 hashes, HMAC session tokens, cookies) · email.ts (Log | Resend | Postmark) · export.ts (CSV, iCal)
          worker.ts (Cloudflare entry: fetch + scheduled + static assets) · node.ts + sqljs.ts (same handler on Node + SQLite for local dev/tests)
-         migrations/0001_init.sql · 0002_auth.sql · 0003_rate_limits.sql   (incremental, tracked in d1_migrations)
+         migrations/0001_init.sql · 0002_auth.sql · 0003_rate_limits.sql · 0004_v4.sql   (incremental, tracked in d1_migrations)
 src/     React + Vite. api.ts: DemoApi (in-browser engine, demo only) | HttpApi (live, cookies). Pages: Coach.tsx (coach + ops shell), Auth.tsx, Welcome.tsx, Player.tsx, Parent.tsx, Inbox.tsx, Log.tsx
 ```
 **Schema.** 21 normalized tables with foreign keys (`DEFERRABLE INITIALLY DEFERRED`, `ON DELETE CASCADE` from players) and indexes on every lookup column: families, users, players, applications, invites, consents, cycles, drills, templates, assignments, submissions, reviews, messages, habits, milestones, digests, meetings, notifications, outbox, data_requests, events. Also settings/meta (key-value), credentials (password/PIN hashes), auth_sessions (HMAC'd token hashes), password_tokens and login_attempts. A write only upserts the rows that changed and deletes removed rows, in one atomic D1 batch.

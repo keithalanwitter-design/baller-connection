@@ -5,12 +5,12 @@ import { SYSTEM, type Actor } from '../shared/permissions';
 import { seed } from '../shared/seed';
 import { buildOpsQueue, buildQueue, teamLoad } from '../shared/workflow';
 
-const KEY = 'baller-connection-v3';
+const KEY = 'baller-connection-v4';
 const DEMO_STAFF: Record<string, Me> = { head: { id: 'u_head', name: 'Coach [Your Name]', role: 'head' }, assistant: { id: 'u_asst', name: 'Jamie Reed', role: 'assistant' }, ops: { id: 'u_ops', name: 'Lee Hart', role: 'ops' } };
 /** Demo: the shared engine in the browser, persisted to localStorage. The demo bar picks who you are. */
 export class DemoApi implements BallerApi {
   readonly mode = 'demo' as const; private s: Snapshot;
-  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
+  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings?.reviewsPerWeek && s.reflections ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
   private save() { localStorage.setItem(KEY, JSON.stringify(this.s)); }
   /** Resolve the demo persona for a command: staff by role, family members by the player they act on. */
   actor(cmd: Command, as?: Me): Actor {

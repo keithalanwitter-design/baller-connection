@@ -11,7 +11,7 @@ const PLANS = [
 const FAQ = [
   ['Is this in person?', 'No. Players train on their own court or driveway, log the work in the app, and get written feedback. Live video calls are included on Development and Inner Circle.'],
   ['What ages?', 'Players 10–16 who can practice on their own 2+ days a week. Younger players are welcome if a parent helps them log.'],
-  ['Why only 15 players?', 'One coach reviews every submission personally. Past 15, replies slow down and plans stop being personal, so we cap it and keep a waitlist. The app enforces the cap.'],
+  ['Why only 15 players?', 'Your coach reviews your check-ins personally, and the head coach checks any review an assistant writes. Past 15, replies slow down and plans stop being personal, so we cap it and keep a waitlist. The app enforces the cap.'],
   ['What happens if the coach is late?', 'Every submission has a reply-by time based on your plan. If it passes, it jumps to the top of the coach’s queue marked overdue, and you can see the deadline on your Today screen.'],
   ['Do you review game film?', 'Not full game film. Players can describe a 60-second phone clip in a self-check rep and get a written response. Full film breakdown isn’t offered.'],
   ['Contracts?', 'None. Month to month. Pause anytime from the parent view and pick up exactly where you left off.'],
@@ -57,7 +57,7 @@ export default function Home() {
           <div>
             <p className="kicker orange">Virtual player development · 15 players max</p>
             <h1 className="display xl">One focus.<br />One next rep.<br /><span className="hl">A coach who answers.</span></h1>
-            <p className="lead">Each player gets a personal plan, one rep to do next, and a written reply from their coach on every check-in, with a reply-by time you can see. Parents get a one-minute weekly summary.</p>
+            <p className="lead">Each player gets a personal plan, one rep to do next, and a written reply from their coach on every reviewed check-in (1 a week, up to 3, or every one, by plan), with a reply-by time you can see. Parents get a one-minute weekly summary.</p>
             <div className="row gap"><Link className="btn lg" to="/apply">Apply in 2 minutes</Link><Link className="btn outline lg" to="/app">Try the player demo</Link></div>
             <p className="small dim">From $69/month · No contracts · Every reply has a deadline</p>
           </div>
@@ -88,7 +88,7 @@ export default function Home() {
 
         <section className="paper" id="plans"><div className="wrap">
           <p className="kicker">Plans</p><h2 className="display">Priced by coach time. Honest limits.</h2>
-          <p className="muted">One coach and 15 players in total, so every rep gets a personal reply. When the roster is full, new families go on the waitlist automatically.</p>
+          <p className="muted">One coach and 15 players in total, so every reviewed rep gets a personal reply. When the roster is full, new families go on the waitlist automatically.</p>
           <div className="tiers">{PLANS.map((t) => (
             <article key={t.name} className={`tier ${t.featured ? 'feat' : ''}`}>
               <span className="kicker">{t.tag}</span><h3 className="display">{t.name}</h3>
@@ -103,7 +103,7 @@ export default function Home() {
           <div className="avatar" aria-hidden>?</div>
           <div><p className="kicker orange">Your coach</p><h2 className="display">Coach [Your Name]</h2>
             <p className="note">Placeholder: Keith, replace this with your real bio, photo and coaching background.</p>
-            <p>Every plan, review and message comes from one coach, not a rotating staff and not an AI. Say here who you’ve coached, what you believe about development, and why you cap the roster.</p></div>
+            <p>Every plan, review and message comes from a real coach you know by name, never an AI, and the head coach checks any review an assistant writes. Say here who you’ve coached, what you believe about development, and why you cap the roster.</p></div>
         </div></section>
 
         <section className="paper" id="faq"><div className="wrap narrow">

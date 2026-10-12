@@ -7,7 +7,7 @@ const LANES: { stage: string; who: 'family' | 'coach' | 'player' | 'system'; sta
   { stage: 'Join', who: 'family', states: ['Applied', 'Fit review', 'Invited', 'Onboarding'], note: 'Coach decides fit against live capacity. Full roster or Inner Circle → Waitlist.' },
   { stage: 'Plan', who: 'coach', states: ['Plan building', 'Plan set'], note: 'Coach owes a plan within 2 business days of onboarding. Player reads the focus to unlock rep 1.' },
   { stage: 'Loop', who: 'player', states: ['Work ready', 'Submitted', 'Feedback due', 'Next step ready'], note: 'Submitted → Feedback due after 24 h. Past the tier’s reply-by time it’s overdue and jumps to the top of the queue.' },
-  { stage: 'Grow', who: 'coach', states: ['Cycle review'], note: 'After the last rep of a cycle, the coach re-rates the rubric and publishes cycle N+1.' },
+  { stage: 'Grow', who: 'coach', states: ['Cycle review'], note: 'Every 4 weeks (or after the last rep): the player says what improved, the coach re-rates the rubric and picks the next focus, then publishes cycle N+1.' },
 ];
 export default function How() {
   return (<>
@@ -31,9 +31,14 @@ export default function How() {
       </div>
 
       <div className="grid3">
-        <div className="card"><h3>Reply-by SLAs</h3><p>Foundation: 2 business days · Development: 1 · Inner Circle: same business day. Weekends don’t count. Messages from families get the same window.</p></div>
+        <div className="card"><h3>Reply-by SLAs</h3><p>Foundation: 2 business days · Development: 1 · Inner Circle: same business day. Weekends don’t count. Messages from families get the same window; parents can mark a message urgent (4 office hours).</p></div>
         <div className="card"><h3>Capacity</h3><p>15 players on the roster, 4 in Inner Circle. The engine refuses invites past the cap and moves the family to Waitlist.</p></div>
-        <div className="card"><h3>Coach queue</h3><p>One list: Reply needed → Work ready → Plan needed → Activation → Upcoming. Overdue items go first. The counts are computed from the rows.</p></div>
+        <div className="card"><h3>Coach queue</h3><p>One list: Reply needed → Sign-off → Work ready → Cycle review → Plan needed → Promise → Activation → Upcoming. Overdue items go first. Promise items appear before a promise is at risk.</p></div>
+      </div>
+      <div className="grid3">
+        <div className="card"><h3>Weekly rhythm</h3><p>Mon: plan drop · Wed: mid-week check-in · Fri: wrap and two-line reflection · Sun: parent summary. Notifications and the Today screen follow it.</p></div>
+        <div className="card"><h3>Reviews per week</h3><p>Foundation 1 · Development up to 3 · Inner Circle every submission. Extra check-ins are logged and the next rep still unlocks.</p></div>
+        <div className="card"><h3>Promise ledger</h3><p>Every promise on this site maps to an engine rule, a family screen and a coach alert. See <code>PROMISES.md</code>.</p></div>
       </div>
       <div className="row gap"><Link className="btn" to="/log">Open the live system log</Link><Link className="btn ghost" to="/coach">See the coach queue</Link></div>
     </div></main>

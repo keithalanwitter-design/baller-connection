@@ -43,14 +43,14 @@ describe('invites + consent', () => {
 describe('routing, sign-off, reassignment', () => {
   it('queue items are routed to the assigned coach; sign-off goes to the head coach', () => {
     let s = seed(); expect(buildQueue(s, 'u_asst').every((q) => q.player.coachId === 'u_asst')).toBe(true);
-    expect(() => dispatch(s, { type: 'review', playerId: 'riley', decision: 'approve', feedback: 'Good stuff here' }, { id: 'u_x', role: 'assistant' })).toThrow(PermissionError);
-    s = run(s, ASST, { type: 'review', playerId: 'riley', decision: 'approve', feedback: 'Nice tempo, keep eyes up.' }); expect(P(s, 'riley').state).toBe('Sign-off');
+    expect(() => dispatch(s, { type: 'review', playerId: 'riley', decision: 'approve', wentWell: 'Good stuff here', adjust: 'Keep eyes up', why: 'It builds control' }, { id: 'u_x', role: 'assistant' })).toThrow(PermissionError);
+    s = run(s, ASST, { type: 'review', playerId: 'riley', decision: 'approve', wentWell: 'Nice tempo, keep eyes up.', adjust: 'Keep eyes up', why: 'It builds control' }); expect(P(s, 'riley').state).toBe('Sign-off');
     expect(buildQueue(s, 'u_head').find((q) => q.player.id === 'riley')?.kind).toBe('Sign-off');
     expect(() => dispatch(s, { type: 'signOff', playerId: 'riley', approve: true }, ASST)).toThrow(PermissionError);
-    s = run(s, HEAD, { type: 'signOff', playerId: 'riley', approve: true, feedback: 'Nice tempo, eyes up. Same next rep.' }); expect(P(s, 'riley').state).toBe('Next step ready');
+    s = run(s, HEAD, { type: 'signOff', playerId: 'riley', approve: true, edit: { adjust: 'Nice tempo, eyes up. Same next rep.' } }); expect(P(s, 'riley').state).toBe('Next step ready');
     expect(s.notifications.some((n) => n.userId === 'u_riley' && n.type === 'feedback_ready')).toBe(true);
   });
-  it('sign-off can be turned off', () => { const s = run(run(seed(), HEAD, { type: 'updateSettings', patch: { requireSignoff: false } }), ASST, { type: 'review', playerId: 'riley', decision: 'retry', feedback: 'Again with lower dribble.' }); expect(P(s, 'riley').state).toBe('Work ready'); });
+  it('sign-off can be turned off', () => { const s = run(run(seed(), HEAD, { type: 'updateSettings', patch: { requireSignoff: false } }), ASST, { type: 'review', playerId: 'riley', decision: 'retry', wentWell: 'Again with lower dribble.', adjust: 'Keep eyes up', why: 'It builds control' }); expect(P(s, 'riley').state).toBe('Work ready'); });
   it('reassignment logs a handoff and moves queue ownership', () => {
     const s = run(seed(), OPS, { type: 'assignCoach', playerId: 'riley', coachId: 'u_head' }); expect(s.events.at(-1)!.type).toBe('handoff');
     expect(buildQueue(s, 'u_head').some((q) => q.player.id === 'riley')).toBe(true); expect(buildQueue(s, 'u_asst').some((q) => q.player.id === 'riley')).toBe(false);
@@ -67,7 +67,7 @@ describe('cron sweep + notifications', () => {
   it('plan published + new submission + cycle review notify the right people', () => {
     let s = seed(); s = run(s, HEAD, { type: 'publishPlan', playerId: 'sam', focus: 'Weak hand', drillIds: ['d1'] }); expect(s.notifications.some((n) => n.userId === 'u_sam' && n.type === 'plan_published')).toBe(true);
     s = run(s, { id: 'u_sam', role: 'player', playerId: 'sam' }, { type: 'openPlan', playerId: 'sam' }, { type: 'submitRep', playerId: 'sam', repsDone: 1, reflection: 'Did it all' }); expect(s.notifications.some((n) => n.userId === 'u_head' && n.type === 'new_submission')).toBe(true);
-    s = run(s, HEAD, { type: 'review', playerId: 'sam', decision: 'approve', feedback: 'Great. Keep it low.' }); s = run(s, { id: 'u_sam', role: 'player', playerId: 'sam' }, { type: 'startNext', playerId: 'sam' }); expect(P(s, 'sam').state).toBe('Cycle review'); expect(s.notifications.some((n) => n.type === 'cycle_review')).toBe(true);
+    s = run(s, HEAD, { type: 'review', playerId: 'sam', decision: 'approve', wentWell: 'Great. Keep it low.', adjust: 'Keep eyes up', why: 'It builds control' }); s = run(s, { id: 'u_sam', role: 'player', playerId: 'sam' }, { type: 'startNext', playerId: 'sam' }); expect(P(s, 'sam').state).toBe('Cycle review'); expect(s.notifications.some((n) => n.type === 'cycle_review')).toBe(true);
   });
   it('weekly digests are generated as drafts for the coach', () => { const s = run(seed(), SYSTEM, { type: 'generateDigests' }); expect(s.digests.filter((d) => d.status === 'draft').length).toBeGreaterThan(0); });
 });

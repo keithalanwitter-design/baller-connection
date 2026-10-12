@@ -1,4 +1,4 @@
-import { TABLES, type Settings, type Snapshot, type TableName } from '../shared/domain';
+import { SETTINGS_DEFAULTS, TABLES, type Settings, type Snapshot, type TableName } from '../shared/domain';
 import type { Db, Stmt } from './db';
 import { ORDER, SCHEMA, type Col } from './schema';
 
@@ -15,7 +15,7 @@ export class Repo {
   async load(): Promise<Snapshot> {
     const meta = Object.fromEntries((await this.db.prepare('SELECT key, value FROM meta').all<{ key: string; value: string }>()).results.map((r) => [r.key, r.value]));
     const settings = Object.fromEntries((await this.db.prepare('SELECT key, value FROM settings').all<{ key: string; value: string }>()).results.map((r) => [r.key, JSON.parse(r.value)])) as unknown as Settings;
-    const out: Record<string, unknown> = { version: Number(meta.version ?? 0), clockOffsetMs: Number(meta.clockOffsetMs ?? 0), settings };
+    const out: Record<string, unknown> = { version: Number(meta.version ?? 0), clockOffsetMs: Number(meta.clockOffsetMs ?? 0), settings: { ...SETTINGS_DEFAULTS, ...settings } };
     for (const t of TABLES) {
       const { table, cols } = SCHEMA[t];
       const rows = (await this.db.prepare(`SELECT ${cols.map((c) => c.col).join(', ')} FROM ${table}${t === 'events' ? ' ORDER BY at' : ''}`).all<Row>()).results;
@@ -53,6 +53,7 @@ export class Repo {
   // ---- targeted reads ----
   outbox(limit = 100) { return this.db.prepare('SELECT id, recipient AS "to", subject, body, at, status, kind FROM outbox ORDER BY at DESC LIMIT ?').bind(limit).all<Row>(); }
   queuedEmails() { return this.db.prepare("SELECT id, recipient AS \"to\", subject, body FROM outbox WHERE status = 'queued' ORDER BY at").all<{ id: string; to: string; subject: string; body: string }>(); }
+  setEmailBody(id: string, body: string) { return this.db.prepare('UPDATE outbox SET body = ? WHERE id = ?').bind(body, id).run(); }
   markEmail(id: string, status: string) { return this.db.prepare('UPDATE outbox SET status = ? WHERE id = ?').bind(status, id).run(); }
   unemailedNotifications() { return this.db.prepare('SELECT n.id, n.user_id, n.text, n.link, u.email, u.name FROM notifications n JOIN users u ON u.id = n.user_id WHERE n.emailed_at IS NULL AND n.read_at IS NULL ORDER BY n.at').all<{ id: string; user_id: string; text: string; link: string; email: string | null; name: string }>(); }
   markEmailed(ids: string[]) { return this.db.batch(ids.map((i) => this.db.prepare('UPDATE notifications SET emailed_at = ? WHERE id = ?').bind(new Date().toISOString(), i))); }

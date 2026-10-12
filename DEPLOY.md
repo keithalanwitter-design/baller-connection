@@ -1,4 +1,4 @@
-# Deploying Baller Connection v3
+# Deploying Baller Connection v4
 
 One Worker serves the API, the built app (static assets) and the cron jobs, with D1 as the database. Same origin means the session cookie is first-party. No credentials are stored in this repo.
 
@@ -17,6 +17,8 @@ Paste the printed `database_id` into `wrangler.toml` (`REPLACE_WITH_ID_FROM_wran
 npm run db:migrate:remote        # = wrangler d1 migrations apply baller-connection --remote
 ```
 To change the schema later, add `server/migrations/0004_<name>.sql` and run the same command. Never edit an applied file.
+
+> v4 adds `0004_v4.sql`: new columns, plus reflections and cycle_reviews. Invites are rebuilt with hashed tokens and codes, so **any pending v3 invites are revoked and must be re-sent**.
 
 ## 3 · Secrets and vars
 ```bash

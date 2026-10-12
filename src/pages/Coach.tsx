@@ -6,9 +6,15 @@ import { TIER_INFO, replyLabel, type Billing, type Drill, type OutboxEmail, type
 import { relative, shortWhen, weekKey } from '../../shared/time';
 import { OPS_KINDS, QUEUE_KINDS, buildOpsQueue, buildQueue, capacity, clock, family, first, guide, lastSubmission, pendingReview, playerAssignments, playerCycle, progress, staff, teamLoad, tierReply, userName, type OpsKind, type QueueKind } from '../../shared/workflow';
 import { playerCsv, calendarIcs } from '../../server/export';
-import { ActionButton, Back, Journal, Moments, PathPanel, Pill, Rubric, Thread, Track, UserMenu } from '../ui';
+import { ActionButton, Back, Moments, PathPanel, Pill, Rubric, Track, UserMenu } from '../ui';
 import SystemLog from './Log';
 import Inbox from './Inbox';
+import { CoachKnows, FeedbackCard, FeedbackTimeline, PromiseCard, UnifiedInbox, WeekRhythm, useNextItem, useNextShortcut } from '../v4';
+import { coachKnows, feedbackTemplate, repWhy } from '../../shared/personal';
+import { promiseRisks } from '../../shared/promises';
+import { sha256 } from '../../shared/sha256';
+import { DEMO_INVITE } from '../../shared/seed';
+import { lastReview, OWED } from '../../shared/workflow';
 
 const k = (x: string) => x.split(' ')[0].toLowerCase().replace(/[^a-z]/g, '');
 const download = (name: string, text: string, type = 'text/csv') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); };
@@ -31,10 +37,14 @@ function QRow({ i, to, name, kind, state, what, why, owner, unlocks, dueBy, over
 function ActionCenter() {
   const s = useSnap(); const { as } = useStore(); const isHead = as?.role === 'head'; const [scope, setScope] = useState<'mine' | 'all'>('mine');
   const q = buildQueue(s, scope === 'mine' || !isHead ? as?.id : undefined); const [f, setF] = useState<QueueKind | 'All'>('All'); const t = clock(s);
-  const urgent = q.filter((x) => x.kind !== 'Upcoming').length; const overdue = q.filter((x) => x.overdue).length; const rows = q.filter((x) => f === 'All' || x.kind === f);
+  const urgent = q.filter((x) => OWED(x.kind)).length; const overdue = q.filter((x) => x.overdue).length; const rows = q.filter((x) => f === 'All' || x.kind === f); const { run } = useStore(); const next = useNextItem();
+  const safeSign = q.filter((x) => x.kind === 'Sign-off' && pendingReview(s, x.player.id)?.decision === 'approve');
   return (<>
     <div className="row between wrapx"><div><p className="kicker">{t.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {as?.name}</p><h1 className="display">Action Center</h1>
       <p className="lead sm">{urgent === 0 ? 'You’re clear. Nobody is waiting on you.' : <>{urgent} {urgent === 1 ? 'thing needs' : 'things need'} you{overdue ? <>, <b className="overdue-t">{overdue} overdue</b></> : ''}. Most urgent first.</>}</p></div><Capacity /></div>
+    {next && <Link className="nextbar" to={next.to}><span className="kicker">Next up · press N</span><b>{next.player.name}: {next.kind}</b><span className="small">{next.what}</span><span className="btn sm">Open →</span></Link>}
+    {isHead && safeSign.length > 1 && <button className="btn sm ghost" onClick={async () => { for (const x of safeSign) await run({ type: 'signOff', playerId: x.player.id, approve: true }); }}>Sign off all {safeSign.length} approvals as written</button>}
+    <WeekRhythm role="coach" />
     <div className="row gap wrapx">
       {isHead && <div className="seg light" role="group" aria-label="Whose queue"><button aria-pressed={scope === 'mine'} className={scope === 'mine' ? 'on' : ''} onClick={() => setScope('mine')}>Mine</button><button aria-pressed={scope === 'all'} className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>Whole team</button></div>}
       <div className="chips" role="group" aria-label="Filter queue">
@@ -43,7 +53,7 @@ function ActionCenter() {
       </div></div>
     <ol className="queue">{rows.map((x, i) => <QRow key={x.key} i={i} to={x.to} name={x.player.name} kind={x.kind} state={x.player.state} what={x.what} why={x.why} owner={scope === 'all' ? x.ownerName : undefined} unlocks={x.unlocks} dueBy={x.dueBy} overdue={x.overdue} />)}
       {rows.length === 0 && <li className="panel dim">Nothing in this lane.</li>}</ol>
-    <p className="small dim">Items are routed to the player’s assigned coach; assistant reviews route to the head coach for sign-off. Counts come from the same list as the rows. The SLA sweep runs on a schedule (every 15 min).</p>
+    <p className="small dim">Routed to the assigned coach; assistant reviews go to the head coach. “Promise” items appear before a family promise is at risk. Press <kbd>N</kbd> anywhere to open the next item.</p>
   </>);
 }
 
@@ -61,41 +71,87 @@ function OpsQueue() {
 function Review() {
   const { id } = useParams(); const s = useSnap(); const { run, as } = useStore(); const nav = useNavigate();
   const p = s.players.find((x) => x.id === id); const sub = p && lastSubmission(s, p.id); const a = sub && s.assignments.find((x) => x.id === sub.assignmentId);
-  const pend = p && pendingReview(s, p.id); const [fb, setFb] = useState(''); const [edit, setEdit] = useState<string | null>(null);
-  if (!p || !sub || !a || !['Submitted', 'Feedback due', 'Sign-off'].includes(p.state)) return <div className="panel"><h2 className="display">Nothing to review</h2><p>This work was already reviewed.</p><Link className="btn" to="/coach">Back to Action Center</Link></div>;
-  const queued = playerAssignments(s, p.id).filter((x) => x.status === 'queued'); const late = new Date(sub.dueBy) < clock(s);
-  const act = async (decision: 'approve' | 'retry') => { if (await run({ type: 'review', playerId: p.id, decision, feedback: fb })) nav('/coach'); };
-  const sign = async (approve: boolean) => { if (await run({ type: 'signOff', playerId: p.id, approve, feedback: edit ?? undefined })) nav('/coach'); };
-  const signoffRule = s.settings.requireSignoff && as?.role === 'assistant';
+  const pend = p && pendingReview(s, p.id); const [f, setF] = useState({ wentWell: '', adjust: '', why: '', linkUrl: '' }); const [edit, setEdit] = useState<{ wentWell?: string; adjust?: string; why?: string }>({});
+  const next = useNextItem(p ? undefined : undefined); const [focused, setFocused] = useState<'wentWell' | 'adjust' | 'why'>('adjust');
+  if (!p || !sub || !a || !['Submitted', 'Feedback due', 'Sign-off'].includes(p.state)) return <div className="panel"><h2 className="display">Nothing to review</h2><p>This work was already reviewed.</p><div className="row gap">{next && <Link className="btn" to={next.to}>Next: {next.player.name} · {next.kind} →</Link>}<Link className="btn ghost" to="/coach">Action Center</Link></div></div>;
+  const queued = playerAssignments(s, p.id).filter((x) => x.status === 'queued'); const late = new Date(sub.dueBy) < clock(s); const tpl = feedbackTemplate(p); const prev = lastReview(s, p.id); const cyc = playerCycle(s, p.id);
+  const goNext = () => { const q = buildQueue(s, as?.id).filter((x) => OWED(x.kind) && x.player.id !== p.id)[0]; nav(q ? q.to : '/coach'); };
+  const act = async (decision: 'approve' | 'retry') => { if (await run({ type: 'review', playerId: p.id, decision, ...f, linkUrl: f.linkUrl.trim() || undefined, rev: p.rev })) goNext(); };
+  const sign = async (approve: boolean) => { if (await run({ type: 'signOff', playerId: p.id, approve, edit, rev: p.rev })) goNext(); };
+  const signoffRule = s.settings.requireSignoff && as?.role === 'assistant'; const ready = f.wentWell.trim().length >= 3 && f.adjust.trim().length >= 3 && f.why.trim().length >= 3;
+  const cues = [...new Set([...a.cues, ...(cyc ? [`Focus: ${cyc.focus}`] : [])])];
+  const LABEL = { wentWell: 'What they did well', adjust: 'One adjustment', why: 'Why (tie it to their goal)' } as const;
   return (
     <div className="review">
       <Back to="/coach">Action Center</Back>
       <div className="row between wrapx"><h1 className="display">{p.state === 'Sign-off' ? 'Sign-off' : 'Review'}: {p.name}</h1><span className={`sla big ${late ? 'late' : ''}`}><b>{late ? 'OVERDUE' : 'Reply by'}</b>{shortWhen(sub.dueBy)}</span></div>
-      <p className="dim">Focus: {playerCycle(s, p.id)?.focus} · {p.tier} (replies {tierReply(s, p)}) · Assigned to {userName(s, p.coachId)}</p>
+      <p className="dim">Focus: {cyc?.focus} · {p.tier} (replies {tierReply(s, p)}) · Age {p.age} · Assigned to {userName(s, p.coachId)}</p>
       <div className="grid2">
-        <section className="panel"><p className="kicker">Submitted {shortWhen(sub.at)}</p><h2 className="display">{a.title}</h2><p><b>{sub.repsDone}/{a.reps}</b> sets done</p><blockquote className="quote sm">“{sub.reflection}”</blockquote>{sub.linkUrl && <a className="attach" href={sub.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {sub.linkUrl}</a>}<ul className="cues">{a.cues.map((c) => <li key={c}>{c}</li>)}</ul></section>
-        {p.canvas && <section className="panel canvas"><p className="kicker">Your canvas (coach only)</p><p>{p.canvas}</p></section>}
+        <section className="panel"><p className="kicker">Submitted {shortWhen(sub.at)}</p><h2 className="display">{a.title}</h2><p><b>{sub.repsDone}/{a.reps}</b> sets done</p><blockquote className="quote sm">“{sub.reflection}”</blockquote>{sub.linkUrl && <a className="attach" href={sub.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {sub.linkUrl}</a>}
+          {prev && <><p className="kicker">Previous feedback</p><FeedbackCard p={p} r={prev} me="coach" compact /></>}</section>
+        <section className="panel canvas"><p className="kicker">Who you’re coaching</p><p><b>In their words:</b> {coachKnows(p) || '—'}</p>{p.canvas && <><p className="kicker">Your canvas (coach only)</p><p>{p.canvas}</p></>}<p className="small dim">Learns by “{p.learnStyle}”: {tpl.label}.{p.age < 13 ? ' Under 13: short sentences, one idea.' : ''}</p></section>
       </div>
       {p.state === 'Sign-off' && pend ? (
         <section className="panel signoff"><p className="kicker">{userName(s, pend.reviewerId)} · {shortWhen(pend.at)} · proposed: <b>{pend.decision === 'approve' ? 'Approve' : 'Another attempt'}</b></p>
           {as?.role === 'head' ? <>
-            <label htmlFor="ed" className="strong">Feedback the family will see</label><textarea id="ed" className="input" rows={3} value={edit ?? pend.feedback} onChange={(e) => setEdit(e.target.value)} />
-            <div className="outcomes"><button className="outcome ok" onClick={() => sign(true)}><b>Sign off{edit !== null && edit !== pend.feedback ? ' with edits' : ''}</b><span>{first(p.name)} → {pend.decision === 'approve' ? 'Next step ready' : 'Work ready (another attempt)'}.</span></button>
+            {(['wentWell', 'adjust', 'why'] as const).map((k) => <div key={k}><label htmlFor={`ed-${k}`} className="strong">{LABEL[k]}</label><input id={`ed-${k}`} className="input" value={edit[k] ?? pend[k] ?? ''} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} /></div>)}
+            <p className="small dim">Next rep: {pend.nextRep}</p>
+            <div className="outcomes"><button className="outcome ok" onClick={() => sign(true)}><b>Sign off{Object.keys(edit).length ? ' with edits' : ''}</b><span>{first(p.name)} → {pend.decision === 'approve' ? 'Next step ready' : 'Work ready (another attempt)'}.</span></button>
               <button className="outcome retry" onClick={() => sign(false)}><b>Flip to {pend.decision === 'approve' ? 'Another attempt' : 'Approve'}</b><span>Overrides the assistant’s call. Logged.</span></button></div>
-          </> : <><blockquote className="quote sm">{pend.feedback}</blockquote><p className="dim">Waiting for {userName(s, s.users.find((u) => u.role === 'head')?.id)} to sign off. The family sees “Sign-off: head coach is finalizing”.</p></>}
+          </> : <><FeedbackCard p={p} r={pend} me="coach" compact /><p className="dim">Waiting for {userName(s, s.users.find((u) => u.role === 'head')?.id)} to sign off. The family sees “head coach checking it”.</p></>}
         </section>) : (
-      <section className="panel">
-        <label htmlFor="fb" className="strong">Feedback: one observation, one cue</label>
-        <textarea id="fb" className="input" rows={3} value={fb} onChange={(e) => setFb(e.target.value)} placeholder="Good read on the left wing. Next: set your feet before the catch." />
-        <div className="row wrapx">{['Exactly right. Keep that.', 'Slow it down: 3 walk-throughs first.', 'Love the honesty in that reflection.'].map((x) => <button key={x} className="chip" onClick={() => setFb((v) => (v ? v + ' ' : '') + x)}>+ {x}</button>)}</div>
-        {signoffRule && <p className="note">Your reviews go to the head coach for sign-off before {first(p.name)} sees them ({p.name} → Sign-off).</p>}
+      <section className="panel composer4">
+        <p className="kicker">Feedback · same four parts every time · {tpl.label}</p>
+        {tpl.order.map((k) => <div key={k}><label htmlFor={`f-${k}`} className="strong">{LABEL[k]}</label><input id={`f-${k}`} className="input" value={f[k]} onFocus={() => setFocused(k)} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={tpl.hint[k]} /></div>)}
+        <div className="row wrapx" aria-label="Quick-pick cues"><span className="small dim">Cues → {LABEL[focused].toLowerCase()}:</span>{cues.map((x) => <button key={x} className="chip" onClick={() => setF((v) => ({ ...v, [focused]: v[focused] ? `${v[focused]} ${x}` : x }))}>+ {x}</button>)}</div>
+        <p className="small"><b>Next rep (automatic):</b> {queued.length ? queued[0].title : 'Cycle wrap-up and review'} · or the same rep again if you pick Another attempt.</p>
+        <label htmlFor="f-link" className="small dim">Optional link (a demo clip hosted elsewhere)</label><input id="f-link" className="input" type="url" value={f.linkUrl} onChange={(e) => setF({ ...f, linkUrl: e.target.value })} placeholder="https://" />
+        {signoffRule && <p className="note">Your reviews go to the head coach for sign-off before {first(p.name)} sees them.</p>}
         <div className="outcomes">
-          <button className="outcome ok" disabled={fb.trim().length < 5} onClick={() => act('approve')}><b>Approve</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} → Next step ready. {queued.length ? `Unlocks: ${queued[0].title}` : 'Last rep → Cycle review.'}</span></button>
-          <button className="outcome retry" disabled={fb.trim().length < 5} onClick={() => act('retry')}><b>Another attempt</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} → Work ready, same rep with your cue.</span></button>
+          <button className="outcome ok" disabled={!ready} onClick={() => act('approve')}><b>Approve</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} → Next step ready. {queued.length ? `Unlocks: ${queued[0].title}` : 'Last rep → Cycle review.'}</span></button>
+          <button className="outcome retry" disabled={!ready} onClick={() => act('retry')}><b>Another attempt</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} → Work ready, same rep with your adjustment.</span></button>
         </div>
+        <p className="small dim">After you send: the next item in your queue opens.</p>
       </section>)}
     </div>
   );
+}
+
+function AdjustPlan({ p }: { p: Player }) {
+  const s = useSnap(); const { run } = useStore(); const c = playerCycle(s, p.id); const [open, setOpen] = useState(false); const [note, setNote] = useState(''); const [add, setAdd] = useState('');
+  if (!c || c.status !== 'active' || !['Plan set', 'Work ready', 'Submitted', 'Feedback due', 'Sign-off', 'Next step ready'].includes(p.state)) return null;
+  return <section className="panel"><div className="row between"><h3 className="display">Plan</h3><span className="small dim">{c.adjustedAt ? `Adjusted ${shortWhen(c.adjustedAt)}` : `Set ${shortWhen(c.startAt)}`} · cycle review {shortWhen(c.endAt)}</span></div>
+    {!open ? <button className="btn sm ghost" onClick={() => setOpen(true)}>Adjust plan</button> : <form onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'adjustPlan', playerId: p.id, note, addDrillIds: add ? [add] : [] })) { setOpen(false); setNote(''); setAdd(''); } }}>
+      <label htmlFor="an">What changed and why (the family sees this)</label><input id="an" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Adding tempo work: control is there now" />
+      <label htmlFor="ad">Add a rep (optional)</label><select id="ad" className="input" value={add} onChange={(e) => setAdd(e.target.value)}><option value="">— none —</option>{s.drills.filter((d) => !d.archived).map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}</select>
+      <div className="row gap"><button className="btn sm" disabled={note.trim().length < 3}>Save adjustment</button><button type="button" className="link" onClick={() => setOpen(false)}>Cancel</button></div></form>}</section>;
+}
+
+function CycleReviewCoach() {
+  const { id } = useParams(); const s = useSnap(); const { run } = useStore(); const nav = useNavigate(); const p = s.players.find((x) => x.id === id);
+  const c = p && playerCycle(s, p.id); const cr = c && s.cycleReviews.find((x) => x.cycleId === c.id);
+  const [r, setR] = useState<Record<string, number>>(p?.rubric ?? {}); const [sum, setSum] = useState(''); const [nf, setNf] = useState(cr?.wantNext ?? '');
+  if (!p || !c) return <p>Player not found.</p>;
+  if (p.state !== 'Cycle review') return <><Back to={`/coach/player/${p.id}`}>{p.name}</Back><div className="panel"><h2 className="display">No cycle review open</h2><p>Cycle {c.index} review is due {shortWhen(c.endAt)}. It opens when the cycle ends or the last rep is done.</p></div></>;
+  const subs = s.submissions.filter((x) => x.playerId === p.id && s.assignments.find((a) => a.id === x.assignmentId)?.cycleId === c.id); const appr = s.reviews.filter((x) => x.playerId === p.id && x.decision === 'approve' && x.status === 'final' && subs.some((y) => y.id === x.submissionId)).length;
+  const done = !!cr?.coachAt;
+  return (<>
+    <Back to={`/coach/player/${p.id}`}>{p.name}</Back>
+    <h1 className="display">Cycle {c.index} review: {p.name}</h1>
+    <p className="dim">Focus was “{c.focus}” · {subs.length} check-ins · {appr} approved · {shortWhen(c.startAt)} → {shortWhen(c.endAt)}</p>
+    <div className="grid2">
+      <section className="panel"><p className="kicker">{first(p.name)}’s reflection</p>{cr?.playerAt ? <dl className="dl"><div><dt>Improved</dt><dd>{cr.improved}</dd></div><div><dt>Hardest</dt><dd>{cr.hardest}</dd></div><div><dt>Wants next</dt><dd>{cr.wantNext}</dd></div></dl> : <p className="dim">Not in yet. {first(p.name)} sees “Do my cycle review” on Today. You can go ahead without it.</p>}
+        <p className="kicker">In their words</p><p>{coachKnows(p)}</p></section>
+      <section className="panel"><p className="kicker">What improved: re-rate</p>
+        {done ? <ul className="ratings">{Object.entries(cr!.ratingsAfter ?? {}).map(([k, v]) => <li key={k}>{k} <b>{cr!.ratingsBefore?.[k]} → {v}</b></li>)}</ul> :
+        <ul className="rubric">{Object.keys(p.rubric).map((k) => <li key={k}><span>{k}</span><span className="small dim">was {p.rubric[k]}</span><span className="row"><button className="mini" aria-label={`Lower ${k}`} onClick={() => setR({ ...r, [k]: Math.max(1, (r[k] ?? p.rubric[k]) - 1) })}>−</button><b>{r[k] ?? p.rubric[k]}</b><button className="mini" aria-label={`Raise ${k}`} onClick={() => setR({ ...r, [k]: Math.min(5, (r[k] ?? p.rubric[k]) + 1) })}>+</button></span></li>)}</ul>}</section>
+    </div>
+    {done ? <div className="panel"><p>Summary sent: “{cr!.summary}” · Next focus <b>{cr!.nextFocus}</b></p><Link className="btn" to={`/coach/plan/${p.id}`}>Build cycle {c.index + 1} →</Link></div> :
+    <form className="panel" onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'completeCycleReview', playerId: p.id, summary: sum, ratings: r, nextFocus: nf })) nav(`/coach/plan/${p.id}`); }}>
+      <label htmlFor="cs" className="strong">Summary for {first(p.name)} and family</label><textarea id="cs" className="input" rows={2} value={sum} onChange={(e) => setSum(e.target.value)} placeholder="What changed this cycle, in one or two lines" />
+      <label htmlFor="cf" className="strong">Next focus</label><input id="cf" className="input" value={nf} onChange={(e) => setNf(e.target.value)} placeholder={cr?.wantNext || 'One focus for the next 4 weeks'} />
+      <button className="btn lg" disabled={!sum.trim() || !nf.trim()}>Complete review → build cycle {c.index + 1}</button></form>}
+  </>);
 }
 
 function Roster() {
@@ -109,20 +165,20 @@ function Roster() {
 
 function StaffBox({ p }: { p: Player }) {
   const s = useSnap(); const { run, as, mode, api } = useStore(); const canAssign = as?.role === 'head' || as?.role === 'ops';
-  const [when, setWhen] = useState(''); const [kind, setKind] = useState<'check-in' | 'live'>('check-in');
+  const [when, setWhen] = useState(''); const [kind, setKind] = useState<'check-in' | 'live' | 'goal-review'>('check-in');
   const exportCsv = () => (mode === 'live' ? window.open(api.url(`/api/players/${p.id}/export.csv`)) : download(`${p.name.replace(/\W+/g, '-')}.csv`, playerCsv(s, p.id)));
   const inv = s.invites.filter((i) => i.playerId === p.id).sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0]; const consent = s.consents.find((c) => c.playerId === p.id);
   return <section className="panel"><h3 className="display">Staff</h3><dl className="dl">
     <div><dt>Coach</dt><dd>{canAssign ? <select aria-label="Assigned coach" value={p.coachId} onChange={(e) => run({ type: 'assignCoach', playerId: p.id, coachId: e.target.value })}>{staff(s).filter((u) => u.role !== 'ops').map((u) => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}</select> : userName(s, p.coachId)}</dd></div>
     <div><dt>Billing</dt><dd>{canAssign ? <select aria-label="Billing" value={p.billing} onChange={(e) => run({ type: 'setBilling', playerId: p.id, billing: e.target.value as Billing })}>{['unpaid', 'paid', 'comp'].map((b) => <option key={b}>{b}</option>)}</select> : p.billing} <span className="small dim">${TIER_INFO[p.tier].price}/mo · manual</span></dd></div>
     <div><dt>Consent</dt><dd>{consent ? `${consent.guardianName} · ${shortWhen(consent.at)} · v${consent.version}` : <span className="overdue-t">Not on file</span>}</dd></div>
-    {inv && <div><dt>Invite</dt><dd>{inv.status} · {inv.email}{inv.code && ` · code ${inv.code}`} · expires {shortWhen(inv.expiresAt)}</dd></div>}
+    {inv && <div><dt>Invite</dt><dd>{inv.status} · {inv.email} · expires {shortWhen(inv.expiresAt)} <span className="small dim">(link + code stored hashed)</span></dd></div>}
   </dl>
-    <form className="row gap wrapx" onSubmit={(e) => { e.preventDefault(); if (when) run({ type: 'scheduleSession', playerId: p.id, at: new Date(when).toISOString(), minutes: kind === 'live' ? 30 : 15, kind, note: kind === 'live' ? 'Live session' : 'Check-in' }).then(() => setWhen('')); }}>
+    <form className="row gap wrapx" onSubmit={(e) => { e.preventDefault(); if (when) run({ type: 'scheduleSession', playerId: p.id, at: new Date(when).toISOString(), minutes: kind === 'check-in' ? 20 : 30, kind, note: kind === 'live' ? 'Live session' : kind === 'goal-review' ? 'Season goal review with parents' : 'Video check-in' }).then(() => setWhen('')); }}>
       <label className="sr" htmlFor="sw">Session time</label><input id="sw" className="input" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} style={{ maxWidth: 230 }} />
-      <select aria-label="Session kind" value={kind} onChange={(e) => setKind(e.target.value as 'check-in' | 'live')}><option value="check-in">Check-in</option><option value="live">Live session</option></select><button className="btn sm" disabled={!when}>Schedule</button></form>
+      <select aria-label="Session kind" value={kind} onChange={(e) => setKind(e.target.value as 'check-in' | 'live' | 'goal-review')}><option value="check-in">Video check-in (20)</option><option value="live">Live session (30)</option><option value="goal-review">Season goal review</option></select><button className="btn sm" disabled={!when}>Schedule</button></form>
     <div className="row gap wrapx">{(p.state === 'Applied' || p.state === 'Fit review' || p.state === 'Waitlist' || p.state === 'Invited') && canAssign && <><button className="btn sm" onClick={() => run({ type: 'createInvite', playerId: p.id })}>{p.state === 'Invited' ? 'Resend invite' : 'Send invite'}</button>{p.state !== 'Waitlist' && p.state !== 'Invited' && <button className="btn sm ghost" onClick={() => run({ type: 'decideFit', playerId: p.id, accept: false })}>Waitlist</button>}</>}
-      {p.state === 'Invited' && mode === 'demo' && <Link className="btn sm ghost" to={`/invite?token=${inv?.token ?? ''}`}>Open family invite</Link>}
+      {p.state === 'Invited' && mode === 'demo' && inv?.tokenHash === sha256(DEMO_INVITE.token) && <Link className="btn sm ghost" to={`/invite?token=${DEMO_INVITE.token}`}>Open family invite</Link>}
       {(as?.role === 'head' || as?.role === 'ops') && <button className="btn sm ghost" onClick={exportCsv}>Export CSV</button>}</div>
   </section>;
 }
@@ -131,20 +187,21 @@ function Profile() {
   const { id } = useParams(); const [sp, setSp] = useSearchParams(); const s = useSnap(); const { run, as } = useStore(); const base = useBase(); const view = perspective(as?.role);
   const p = s.players.find((x) => x.id === id); const tab = sp.get('tab') || 'overview';
   if (!p) return <p>Player not found. <Link to={`${base}/roster`}>Roster</Link></p>;
-  const app = s.applications.find((a) => a.playerId === p.id); const tabs = view === 'ops' ? ['overview', 'timeline'] : ['overview', 'canvas', 'messages', 'journal', 'timeline'];
+  const app = s.applications.find((a) => a.playerId === p.id); const tabs = view === 'ops' ? ['overview', 'timeline'] : ['overview', 'canvas', 'messages', 'feedback', 'timeline'];
   return (<>
     <Back to={`${base}/roster`}>Roster</Back>
     <div className="row between wrapx"><div><h1 className="display">{p.name}</h1><p className="dim">{p.age} · {p.position || '—'} · {p.tier} · Parent: {family(s, p).parentName} · Coach: {userName(s, p.coachId)}</p></div><Pill state={p.state} /></div>
     <Track state={p.state} />
-    <div className="seg light" role="tablist">{tabs.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setSp({ tab: t })}>{t === 'canvas' ? 'Player canvas' : t[0].toUpperCase() + t.slice(1)}</button>)}</div>
+    <div className="seg light" role="tablist">{tabs.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setSp({ tab: t })}>{t === 'canvas' ? 'Player canvas' : t === 'feedback' ? 'Feedback history' : t[0].toUpperCase() + t.slice(1)}</button>)}</div>
+    {view !== 'ops' && promiseRisks(s, p).length > 0 && <section className="panel riskbox"><p className="kicker">Promises to keep</p><ul className="plain">{promiseRisks(s, p).map(({ promise, risk }) => <li key={promise.id}>🛡️ <b>{risk.what}</b>{risk.dueBy ? ` · by ${shortWhen(risk.dueBy)}` : ''} <span className="small dim">({promise.text})</span></li>)}</ul></section>}
     {tab === 'overview' && <div className="grid2">
-      <div><PathPanel p={p} role={view} /><StaffBox p={p} />
+      <div><PathPanel p={p} role={view} />{view === 'coach' && <AdjustPlan p={p} />}<StaffBox p={p} />
         {app && <section className="panel"><h3 className="display">Application</h3><dl className="dl">{Object.entries(app.answers).filter(([q]) => q !== 'names').map(([q, v]) => <div key={q}><dt>{q}</dt><dd>{v}</dd></div>)}</dl></section>}</div>
-      <div><section className="panel"><dl className="dl"><div><dt>Focus</dt><dd>{playerCycle(s, p.id)?.focus || '—'}</dd></div><div><dt>Goal</dt><dd>{p.goal || '—'}</dd></div><div><dt>Learns by</dt><dd>{p.learnStyle || '—'}</dd></div><div><dt>Rhythm</dt><dd>{p.rhythm || '—'}</dd></div><div><dt>Next session</dt><dd>{p.nextSession}</dd></div></dl></section>
+      <div><section className="panel"><dl className="dl"><div><dt>Focus</dt><dd>{playerCycle(s, p.id)?.focus || '—'}</dd></div><div><dt>Goal</dt><dd>{p.goal || '—'}</dd></div><div><dt>Learns by</dt><dd>{p.learnStyle || '—'}</dd></div><div><dt>Rhythm</dt><dd>{p.rhythm || '—'}</dd></div><div><dt>Next session</dt><dd>{p.nextSession}</dd></div>{p.tournamentDate && <div><dt>Tournament</dt><dd>{shortWhen(p.tournamentDate)}</dd></div>}</dl></section>{view === 'coach' && <CoachKnows p={p} />}{view === 'coach' && <PromiseCard p={p} title="What the family sees: promises" />}
         {view === 'coach' && <section className="panel"><h3 className="display">Skill rubric</h3><Rubric p={p} edit /></section>}</div></div>}
     {tab === 'canvas' && <section className="panel canvas"><p className="kicker">Coach only. Never shown to the family or ops.</p><label htmlFor="cv" className="strong">How {first(p.name)} ticks</label><textarea id="cv" className="input" rows={6} defaultValue={p.canvas} onBlur={(e) => run({ type: 'updateCanvas', playerId: p.id, canvas: e.target.value })} placeholder="Motivation, triggers, what cues land, family context…" /><p className="small dim">Saves when you leave the field.</p></section>}
-    {tab === 'messages' && <Thread p={p} me="coach" onSend={(t, l) => run({ type: 'sendMessage', playerId: p.id, text: t, linkUrl: l })} />}
-    {tab === 'journal' && <Journal p={p} />}
+    {tab === 'messages' && <UnifiedInbox players={[p]} me="coach" fixedPlayer />}
+    {tab === 'feedback' && <FeedbackTimeline p={p} me="coach" />}
     {tab === 'timeline' && <ol className="events">{s.events.filter((e) => e.playerId === p.id).slice().reverse().map((e) => <li key={e.id} className="ev"><time>{shortWhen(e.at)}</time><span className={`who-tag ${e.role}`}>{e.actorId ? first(userName(s, e.actorId)) : e.role}</span><span className="grow">{e.from && e.to ? <span className="tr">{e.from} → <b>{e.to}</b> </span> : <b>{e.type} </b>}<span className="dim">{e.detail}</span></span></li>)}</ol>}
   </>);
 }
@@ -152,17 +209,18 @@ function Profile() {
 function PlanBuilder() {
   const { id } = useParams(); const s = useSnap(); const { run } = useStore(); const nav = useNavigate();
   const p = s.players.find((x) => x.id === id); const prev = p && playerCycle(s, p.id);
-  const [focus, setFocus] = useState(''); const [pick, setPick] = useState<string[]>([]); const [tpl, setTpl] = useState<string | undefined>(); const [tname, setTname] = useState('');
+  const cr = p && s.cycleReviews.find((x) => x.cycleId === prev?.id && x.coachAt); const [focus, setFocus] = useState(cr?.nextFocus ?? ''); const [pick, setPick] = useState<string[]>([]); const [tpl, setTpl] = useState<string | undefined>(); const [tname, setTname] = useState('');
   if (!p) return <p>Player not found.</p>;
   if (!['Plan building', 'Cycle review'].includes(p.state)) return (<><Back to={`/coach/player/${p.id}`}>{p.name}</Back><div className="panel"><h2 className="display">{p.name} isn’t waiting on a plan</h2><p>Current state: <Pill state={p.state} />. Plans can be published from <b>Plan building</b> or <b>Cycle review</b>.</p><ActionButton g={guide(s, p, 'coach')} /></div></>);
-  const publish = async () => { if (await run({ type: 'publishPlan', playerId: p.id, focus, drillIds: pick, templateId: tpl })) nav('/coach'); };
+  if (p.state === 'Cycle review' && !cr) return (<><Back to={`/coach/player/${p.id}`}>{p.name}</Back><div className="panel"><h2 className="display">Cycle review first</h2><p>Re-rate the rubric and pick the next focus, then build cycle {(prev?.index ?? 0) + 1}.</p><Link className="btn" to={`/coach/cycle/${p.id}`}>Do cycle review →</Link></div></>);
+  const publish = async () => { if (await run({ type: 'publishPlan', playerId: p.id, focus, drillIds: pick, templateId: tpl, rev: p.rev })) nav('/coach'); };
   const drills = s.drills.filter((d) => !d.archived);
   return (<>
     <Back to={`/coach/player/${p.id}`}>{p.name}</Back>
     <h1 className="display">{p.state === 'Cycle review' ? `Cycle ${(prev?.index ?? 0) + 1}` : 'First plan'}: {p.name}</h1>
     <p className="dim">Goal: {p.goal || '—'} · Learns by: {p.learnStyle || '—'} · {p.rhythm || '—'}{prev ? ` · Last focus: ${prev.focus}` : ''}</p>
     {s.templates.length > 0 && <section className="panel"><p className="strong">Start from a template</p><div className="row wrapx">{s.templates.map((t) => <button key={t.id} aria-pressed={tpl === t.id} className={`chip ${tpl === t.id ? 'on' : ''}`} onClick={() => { setTpl(t.id); setFocus(t.focus); setPick(t.drillIds.filter((d) => drills.some((x) => x.id === d))); }}>{t.name}</button>)}</div></section>}
-    <section className="panel"><label htmlFor="fo" className="strong">1 · One focus for the next 2–4 weeks</label><input id="fo" className="input" value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. Dribbling in traffic with eyes up" /></section>
+    <section className="panel"><p className="why">{repWhy(p, null)}</p><label htmlFor="fo" className="strong">1 · One focus for the next 4 weeks</label><input id="fo" className="input" value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. Dribbling in traffic with eyes up" /></section>
     <section className="panel"><p className="strong">2 · Queue the reps in order {pick.length > 0 && <span className="dim">({pick.length} queued, unlocked one at a time)</span>} <Link className="small" to="/coach/library">Edit library →</Link></p>
       <div className="lib">{drills.map((l) => { const n = pick.indexOf(l.id); return <button key={l.id} aria-pressed={n >= 0} className={`opt ${n >= 0 ? 'on' : ''}`} onClick={() => setPick(n >= 0 ? pick.filter((x) => x !== l.id) : [...pick, l.id])}>{n >= 0 && <span className="order">{n + 1}</span>}<strong>{l.title}</strong><span className="small block dim">{l.reps} sets · {l.minutes} min · {l.cues[0]}</span></button>; })}</div>
       <div className="row gap wrapx"><input aria-label="Template name" className="input" style={{ maxWidth: 260 }} value={tname} onChange={(e) => setTname(e.target.value)} placeholder="Save these as a template…" /><button className="btn sm ghost" disabled={!tname.trim() || !pick.length} onClick={() => run({ type: 'saveTemplate', template: { name: tname, focus, drillIds: pick } }).then(() => setTname(''))}>Save template</button></div></section>
@@ -174,7 +232,9 @@ function Digest() {
   const s = useSnap(); const { run } = useStore(); const wk = weekKey(clock(s)); const [edits, setEdits] = useState<Record<string, string>>({});
   const active = s.players.filter((p) => !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(p.state));
   const fallback = (p: Player) => { const pr = progress(s, p.id); return `${first(p.name)} is on a ${pr.streak}-day habit streak and at Level ${pr.level} (${pr.name}). Focus: ${playerCycle(s, p.id)?.focus ?? 'first plan coming'}. Status: ${p.state}.`; };
-  return (<><h1 className="display">Weekly digest</h1><p className="dim">Drafts are generated by the Sunday job from this week’s events. Edit, then approve: the parent gets it in-app and by email.</p>
+  const drafts = active.filter((p) => s.digests.some((x) => x.playerId === p.id && x.week === wk && x.status === 'draft'));
+  return (<><h1 className="display">Weekly digest</h1><p className="dim">Sunday’s job drafts one per player from the week: check-ins, streak, the latest feedback in plain language, and the player’s own Friday words. Edit, then approve. The parent gets it in-app and by email.</p>
+    {drafts.length > 1 && <button className="btn" onClick={() => run({ type: 'approveDigests', items: drafts.map((p) => ({ playerId: p.id, text: edits[p.id] ?? s.digests.find((x) => x.playerId === p.id && x.week === wk)!.text })) })}>Approve all {drafts.length} drafts</button>}
     {active.length === 0 && <p className="dim">No active players yet.</p>}
     {active.map((p) => { const d = s.digests.find((x) => x.playerId === p.id && x.week === wk); const sent = d?.status === 'approved'; const txt = edits[p.id] ?? d?.text ?? fallback(p);
       return <section key={p.id} className="panel"><div className="row between"><strong>{p.name} → {family(s, p).parentName}</strong>{sent ? <span className="pill st-approved">Approved</span> : <span className="pill">{d ? 'Draft (auto)' : 'Draft'}</span>}</div>
@@ -234,7 +294,7 @@ function Team() {
 function SettingsPage() {
   const s = useSnap(); const { run, as } = useStore(); const [f, setF] = useState<Settings>(s.settings); const [saved, setSaved] = useState(false); const head = as?.role === 'head';
   const num = (k: keyof Settings, label: string, min: number, max: number, hint?: string) => <label className="setrow"><span>{label}{hint && <span className="small dim block">{hint}</span>}</span><input className="input" type="number" min={min} max={max} disabled={!head} value={f[k] as number} onChange={(e) => setF({ ...f, [k]: +e.target.value })} /></label>;
-  return (<form onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'updateSettings', patch: f })) setSaved(true); }}>
+  return (<form onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'updateSettings', patch: { ...f, savedReplies: f.savedReplies.map((x) => x.trim()).filter(Boolean) } })) setSaved(true); }}>
     <h1 className="display">Settings</h1>{!head && <p className="note">Only the head coach can change settings.</p>}
     <div className="grid2">
       <section className="panel"><h3 className="display">Reply SLAs by tier</h3><p className="small dim">Business days. 0 = same business day. Drives “reply by” on every submission and message, the overdue sweep, and what families are promised.</p>
@@ -242,6 +302,14 @@ function SettingsPage() {
         {num('dueSoonHours', '“Due soon” warning', 1, 48, 'hours before the deadline')}</section>
       <section className="panel"><h3 className="display">Capacity</h3>{num('capacity', 'Roster cap', 1, 100, 'Invites beyond this go to the waitlist')}{num('innerCircleCap', 'Inner Circle cap', 0, 50)}{num('inviteDays', 'Invite link valid for', 1, 30, 'days')}
         <label className="setrow"><span>Assistant reviews need head-coach sign-off<span className="small dim block">Routes assistant reviews to Sign-off</span></span><input type="checkbox" disabled={!head} checked={f.requireSignoff} onChange={(e) => setF({ ...f, requireSignoff: e.target.checked })} /></label></section>
+      <section className="panel"><h3 className="display">Reviews per week</h3><p className="small dim">Written reviews owed per week (99 = every submission). Extra check-ins are logged and the next rep still unlocks. The family's promise card shows the count.</p>
+        {(Object.keys(f.reviewsPerWeek) as Tier[]).map((t) => <label key={t} className="setrow"><span>{t}</span><input className="input" type="number" min={1} max={99} disabled={!head} value={f.reviewsPerWeek[t]} onChange={(e) => setF({ ...f, reviewsPerWeek: { ...f.reviewsPerWeek, [t]: +e.target.value } })} /></label>)}</section>
+      <section className="panel"><h3 className="display">Office hours & urgent</h3><p className="small dim">Outside these hours, families see “coach is off now, back …”. Urgent messages are due within this many office hours.</p>
+        <label className="setrow"><span>Opens (hour, 0–23)</span><input className="input" type="number" min={0} max={23} disabled={!head} value={f.officeHours.start} onChange={(e) => setF({ ...f, officeHours: { ...f.officeHours, start: +e.target.value } })} /></label>
+        <label className="setrow"><span>Closes (hour)</span><input className="input" type="number" min={1} max={24} disabled={!head} value={f.officeHours.end} onChange={(e) => setF({ ...f, officeHours: { ...f.officeHours, end: +e.target.value } })} /></label>
+        <div className="row wrapx" role="group" aria-label="Office days">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => <button type="button" key={d} disabled={!head} aria-pressed={f.officeHours.days.includes(i)} className={`chip ${f.officeHours.days.includes(i) ? 'on' : ''}`} onClick={() => setF({ ...f, officeHours: { ...f.officeHours, days: f.officeHours.days.includes(i) ? f.officeHours.days.filter((x) => x !== i) : [...f.officeHours.days, i].sort() } })}>{d}</button>)}</div>
+        {num('urgentReplyHours', 'Urgent reply within', 1, 24, 'office hours')}</section>
+      <section className="panel"><h3 className="display">Saved replies</h3><p className="small dim">One per line. They show as one-tap chips in every thread.</p><label htmlFor="sr" className="sr">Saved replies</label><textarea id="sr" className="input" rows={4} disabled={!head} value={f.savedReplies.join('\n')} onChange={(e) => setF({ ...f, savedReplies: e.target.value.split('\n') })} /></section>
       <section className="panel"><h3 className="display">Availability</h3><label htmlFor="av" className="sr">Availability</label><input id="av" className="input" disabled={!head} value={f.availability} onChange={(e) => setF({ ...f, availability: e.target.value })} /><p className="small dim">Shown to families on Messages and Calendar.</p></section>
       <section className="panel"><h3 className="display">Branding</h3><label htmlFor="pn">Program name</label><input id="pn" className="input" disabled={!head} value={f.programName} onChange={(e) => setF({ ...f, programName: e.target.value })} /><label htmlFor="ac">Accent</label><input id="ac" type="color" disabled={!head} value={f.accent} onChange={(e) => setF({ ...f, accent: e.target.value })} /><p className="small dim">Program name is used in email subjects. The accent color is saved but not applied to the app theme yet.</p></section>
     </div>
@@ -258,8 +326,8 @@ function Outbox() {
 }
 
 export function CoachShell({ ops }: { ops?: boolean }) {
-  const s = useSnap(); const { as } = useStore(); const role = as?.role;
-  const q = buildQueue(s, as?.id); const n = q.filter((x) => x.kind !== 'Upcoming').length; const late = q.filter((x) => x.overdue).length; const oq = buildOpsQueue(s);
+  const s = useSnap(); const { as } = useStore(); const role = as?.role; useNextShortcut();
+  const q = buildQueue(s, as?.id); const n = q.filter((x) => OWED(x.kind)).length; const late = q.filter((x) => x.overdue).length; const oq = buildOpsQueue(s);
   const unread = s.notifications.filter((x) => x.userId === as?.id && !x.readAt).length;
   const base = ops ? '/ops' : '/coach'; const L = (to: string, label: ReactNode, end = false) => <NavLink to={to} end={end}>{label}</NavLink>;
   return (
@@ -273,7 +341,7 @@ export function CoachShell({ ops }: { ops?: boolean }) {
       <main id="main" tabIndex={-1} className="cmain">
         <Routes>
           <Route index element={ops ? <OpsQueue /> : <ActionCenter />} /><Route path="roster" element={<Roster />} /><Route path="player/:id" element={<Profile />} />
-          <Route path="review/:id" element={<Review />} /><Route path="plan/:id" element={<PlanBuilder />} /><Route path="digest" element={<Digest />} />
+          <Route path="review/:id" element={<Review />} /><Route path="cycle/:id" element={<CycleReviewCoach />} /><Route path="plan/:id" element={<PlanBuilder />} /><Route path="digest" element={<Digest />} />
           <Route path="library" element={<Library />} /><Route path="calendar" element={<Calendar />} /><Route path="team" element={<Team />} /><Route path="settings" element={<SettingsPage />} />
           <Route path="outbox" element={<Outbox />} /><Route path="inbox" element={<Inbox />} /><Route path="audit" element={<SystemLog embedded />} />
         </Routes>

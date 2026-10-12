@@ -1,3 +1,4 @@
+import { sha256 } from '../../shared/sha256';
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Logo } from '../App';
@@ -37,7 +38,7 @@ export function Reset() {
 /** Invite acceptance: tokenized link or 6-digit backup code → parent account → onboarding. */
 export function Invite() {
   const s = useSnap(); const { api, refresh, mode, setDemoRole } = useStore(); const nav = useNavigate(); const [sp] = useSearchParams();
-  const token = sp.get('token') ?? ''; const inv = s.invites.find((i) => token && i.token === token);
+  const token = sp.get('token') ?? ''; const th = token ? sha256(token) : ''; const inv = s.invites.find((i) => token && i.tokenHash === th);
   const p = inv && s.players.find((x) => x.id === inv.playerId);
   const [f, setF] = useState({ code: '', parentName: p ? family(s, p).parentName : '', email: inv?.email ?? '', password: mode === 'demo' ? 'demo-only' : '' }); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const submit = async () => {

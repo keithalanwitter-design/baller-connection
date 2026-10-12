@@ -17,3 +17,17 @@ export function relative(iso: string, ref: Date): string {
   if (h > 0) return h < 24 ? `in ${h}h` : `in ${Math.round(h / 24)}d`;
   return -h < 24 ? `${-h}h overdue` : `${Math.round(-h / 24)}d overdue`;
 }
+export interface OfficeHours { days: number[]; start: number; end: number }
+export const inOffice = (d: Date, oh: OfficeHours) => oh.days.includes(d.getDay()) && d.getHours() >= oh.start && d.getHours() < oh.end;
+/** Next moment office hours are open (or `d` itself if open now). */
+export function nextOpen(d: Date, oh: OfficeHours): Date {
+  if (inOffice(d, oh)) return new Date(d); const x = new Date(d);
+  for (let i = 0; i < 8; i++) { if (oh.days.includes(x.getDay()) && x.getHours() < oh.start) { x.setHours(oh.start, 0, 0, 0); return x; } x.setDate(x.getDate() + 1); x.setHours(0, 0, 0, 0); }
+  return new Date(d);
+}
+/** `hours` of office time from `d`: used for urgent messages. */
+export function officeDue(d: Date, hours: number, oh: OfficeHours): Date {
+  let x = nextOpen(d, oh); let left = hours * 60;
+  for (let i = 0; i < 20 && left > 0; i++) { const end = new Date(x); end.setHours(oh.end, 0, 0, 0); const avail = (end.getTime() - x.getTime()) / 6e4; if (left <= avail) return new Date(x.getTime() + left * 6e4); left -= avail; x = nextOpen(new Date(end.getTime() + 1000), oh); }
+  return x;
+}

@@ -1,5 +1,6 @@
 import { replyLabel, type Assignment, type CommandType, type LifecycleState, type Perspective, type Player, type Role, type Snapshot } from './domain';
 import { addBusinessDays, isoDay, now, shortWhen } from './time';
+import { promiseRisks } from './promises';
 
 /** Explicit lifecycle state machine: command → allowed source states → target. */
 export const TRANSITIONS: { cmd: CommandType; from: LifecycleState[]; to: LifecycleState | 'dynamic'; actor: Role; label: string }[] = [
@@ -10,11 +11,11 @@ export const TRANSITIONS: { cmd: CommandType; from: LifecycleState[]; to: Lifecy
   { cmd: 'completeOnboarding', from: ['Onboarding'], to: 'Plan building', actor: 'parent', label: 'Profile, goal, rhythm + consent on file' },
   { cmd: 'publishPlan', from: ['Plan building', 'Cycle review'], to: 'Plan set', actor: 'head', label: 'Assigned coach sets focus + reps' },
   { cmd: 'openPlan', from: ['Plan set'], to: 'Work ready', actor: 'player', label: 'Player reads the focus, rep 1 unlocks' },
-  { cmd: 'submitRep', from: ['Work ready'], to: 'Submitted', actor: 'player', label: 'Player logs sets + reflection' },
+  { cmd: 'submitRep', from: ['Work ready'], to: 'dynamic', actor: 'player', label: 'Player logs sets + reflection → Submitted (or logged → Next step ready when the week’s reviews are used)' },
   { cmd: 'sweep', from: ['Submitted'], to: 'Feedback due', actor: 'system', label: 'Cron: 24 h without a reply' },
   { cmd: 'review', from: ['Submitted', 'Feedback due'], to: 'dynamic', actor: 'assistant', label: 'Approve/Retry. Assistant + sign-off rule → Sign-off' },
   { cmd: 'signOff', from: ['Sign-off'], to: 'dynamic', actor: 'head', label: 'Head coach confirms or edits the assistant’s review' },
-  { cmd: 'startNext', from: ['Next step ready'], to: 'dynamic', actor: 'player', label: 'Next rep → Work ready · cycle done → Cycle review' },
+  { cmd: 'startNext', from: ['Next step ready'], to: 'dynamic', actor: 'player', label: 'Next rep → Work ready · cycle done or 4 weeks up → Cycle review' },
   { cmd: 'pause', from: ['Plan building', 'Plan set', 'Work ready', 'Submitted', 'Feedback due', 'Sign-off', 'Next step ready', 'Cycle review'], to: 'Paused', actor: 'parent', label: 'Family pauses' },
   { cmd: 'resume', from: ['Paused'], to: 'dynamic', actor: 'parent', label: 'Back to where they left off' },
 ];
@@ -67,8 +68,14 @@ export function progress(s: Snapshot, pid: string) {
 }
 
 // ---------- the guide: what / why / who / by when / unlocks ----------
-export interface Guide { stage: string; what: string; why: string; who: Role; whoLabel: string; byWhen?: string; unlocks: string; action?: { label: string; to?: string; cmd?: import('./domain').Command } }
+export interface Guide { stage: string; what: string; why: string; who: Role; whoLabel: string; byWhen?: string; unlocks: string; action: { label: string; to?: string; cmd?: import('./domain').Command } }
+/** Every state × perspective gets exactly one primary action (tested). When it isn't your move, the action is the most useful thing you can do while you wait. */
 export function guide(s: Snapshot, p: Player, view: Perspective): Guide {
+  const g = guideRaw(s, p, view);
+  const fallback = view === 'player' ? { label: 'Do today’s habits', to: '/app#habits' } : view === 'parent' ? { label: 'Message the coach', to: '/inbox' } : view === 'ops' ? { label: 'Open record', to: `/ops/player/${p.id}` } : { label: 'Open profile', to: `/coach/player/${p.id}` };
+  return { ...g, action: g.action ?? fallback };
+}
+function guideRaw(s: Snapshot, p: Player, view: Perspective): Omit<Guide, 'action'> & { action?: Guide['action'] } {
   const fn = first(p.name); const parent = family(s, p).parentName; const a = openAssignment(s, p.id); const sub = lastSubmission(s, p.id); const cyc = playerCycle(s, p.id);
   const coach = userName(s, p.coachId); const me = view === 'player' || view === 'parent' ? 'You' : fn; const due = sub?.dueBy ? shortWhen(sub.dueBy) : undefined;
   const planBy = shortWhen(addBusinessDays(new Date(p.stateSince), 2).toISOString()); const isCoach = view === 'coach'; const isOps = view === 'ops'; const fam = view === 'player' || view === 'parent';
@@ -79,31 +86,38 @@ export function guide(s: Snapshot, p: Player, view: Perspective): Guide {
     case 'Waitlist': return { stage: p.state, what: 'On the waitlist.', why: 'Every spot is full. Waiting beats a coach who can’t answer.', who: 'ops', whoLabel: 'Ops', byWhen: 'When a spot opens', unlocks: 'An invite.', action: isOps ? { label: 'Invite if capacity', cmd: { type: 'createInvite', playerId: p.id } } : undefined };
     case 'Invited': return { stage: p.state, what: `${fn} has a spot. The invite is waiting.`, why: 'The parent creates the account and records consent before any coaching starts.', who: 'parent', whoLabel: parent, byWhen: inv ? `Link expires ${shortWhen(inv.expiresAt)}` : undefined, unlocks: 'Onboarding (profile, goal, rhythm, consent).', action: fam ? { label: 'Accept invite', to: '/invite' } : isOps ? { label: 'Resend invite', cmd: { type: 'createInvite', playerId: p.id } } : undefined };
     case 'Onboarding': return { stage: p.state, what: 'Setting up profile, consent, goal and rhythm.', why: `${coach} builds the first plan from these answers.`, who: 'parent', whoLabel: parent, unlocks: `${coach} starts the first plan.`, action: view === 'parent' ? { label: 'Continue setup', to: '/welcome' } : undefined };
-    case 'Plan building': return { stage: p.state, what: `${coach} is building the plan.`, why: `One focus for the next 2–4 weeks, from ${fn}’s goal: “${p.goal}”.`, who: 'head', whoLabel: coach, byWhen: planBy, unlocks: 'The focus and first rep.', action: isCoach ? { label: 'Build plan', to: `/coach/plan/${p.id}` } : view === 'player' ? { label: 'Do today’s habits', to: '/app#habits' } : undefined };
+    case 'Plan building': return { stage: p.state, what: `${coach} is building the plan.`, why: `One focus for the next 4 weeks, from ${fn}’s goal: “${p.goal}”.`, who: 'head', whoLabel: coach, byWhen: planBy, unlocks: 'The focus and first rep.', action: isCoach ? { label: 'Build plan', to: `/coach/plan/${p.id}` } : view === 'player' ? { label: 'Do today’s habits', to: '/app#habits' } : undefined };
     case 'Plan set': return { stage: p.state, what: `New plan: ${cyc?.focus}.`, why: 'Knowing the focus first makes every rep count toward one thing.', who: 'player', whoLabel: view === 'player' ? 'You' : fn, byWhen: 'Today', unlocks: 'Rep 1.', action: fam ? { label: 'Read my focus & unlock rep 1', cmd: { type: 'openPlan', playerId: p.id } } : undefined };
     case 'Work ready': return { stage: p.state, what: `Next rep: ${a?.title ?? 'assigned work'}.`, why: `It builds the focus: ${cyc?.focus}.`, who: 'player', whoLabel: view === 'player' ? 'You' : fn, byWhen: 'Before next session', unlocks: `A reply from ${coach} ${tierReply(s, p)}.`, action: fam ? { label: 'Log practice', to: '/app#rep' } : undefined };
     case 'Submitted': return { stage: p.state, what: `${a?.title ?? 'Rep'} submitted.`, why: `${coach} reads the reflection and gives one cue for the next rep.`, who: 'head', whoLabel: coach, byWhen: due, unlocks: 'Feedback, then the next rep.', action: isCoach ? { label: 'Review now', to: `/coach/review/${p.id}` } : undefined };
     case 'Feedback due': return { stage: p.state, what: 'Coach reply is due.', why: `Replies are promised ${tierReply(s, p)} on the ${p.tier} plan.`, who: 'head', whoLabel: coach, byWhen: due, unlocks: 'Feedback, then the next rep.', action: isCoach ? { label: 'Review now', to: `/coach/review/${p.id}` } : undefined };
     case 'Sign-off': { const pr = pendingReview(s, p.id); return { stage: p.state, what: fam ? 'Feedback written. Head coach is finalizing it.' : `${userName(s, pr?.reviewerId)}’s review needs sign-off.`, why: 'Assistant reviews are checked by the head coach so cues stay consistent.', who: 'head', whoLabel: userName(s, headCoach(s)?.id), byWhen: due, unlocks: 'The feedback and next rep.', action: isCoach ? { label: 'Sign off', to: `/coach/review/${p.id}` } : undefined }; }
-    case 'Next step ready': return { stage: p.state, what: 'New coach feedback is in.', why: 'Read the cue before the next rep so it sticks.', who: 'player', whoLabel: me, byWhen: 'Today', unlocks: 'The next rep (or your cycle wrap-up).', action: fam ? { label: 'Read feedback & start next rep', cmd: { type: 'startNext', playerId: p.id } } : undefined };
-    case 'Cycle review': return { stage: p.state, what: `Cycle ${cyc?.index} complete.`, why: `${coach} re-rates the rubric and picks the next focus from what the reps showed.`, who: 'head', whoLabel: coach, byWhen: planBy, unlocks: `Cycle ${(cyc?.index ?? 0) + 1} with a new focus.`, action: isCoach ? { label: 'Plan next cycle', to: `/coach/plan/${p.id}` } : undefined };
+    case 'Next step ready': { const logged = sub && sub.reviewed === false; return { stage: p.state, what: logged ? 'Rep logged. Next one is open.' : 'New coach feedback is in.', why: logged ? `This week’s reviews on ${p.tier} are used; your coach still sees every log.` : 'Read the cue before the next rep so it sticks.', who: 'player', whoLabel: me, byWhen: 'Today', unlocks: 'The next rep (or your cycle wrap-up).', action: fam ? { label: logged ? 'Start next rep' : 'Read feedback & start next rep', cmd: { type: 'startNext', playerId: p.id } } : undefined }; }
+    case 'Cycle review': { const cr = s.cycleReviews.find((x) => x.cycleId === cyc?.id); const coachDone = !!cr?.coachAt; return { stage: p.state, what: `Cycle ${cyc?.index} review.`, why: coachDone ? `Next focus: “${cr?.nextFocus}”. ${coach} is building the plan.` : `${fn} says what improved; ${coach} re-rates the rubric and picks the next focus.`, who: coachDone || cr?.playerAt ? 'head' : 'player', whoLabel: coachDone || cr?.playerAt ? coach : view === 'player' ? 'You' : fn, byWhen: planBy, unlocks: `Cycle ${(cyc?.index ?? 0) + 1} with a new focus.`, action: isCoach ? (coachDone ? { label: 'Plan next cycle', to: `/coach/plan/${p.id}` } : { label: 'Do cycle review', to: `/coach/cycle/${p.id}` }) : view === 'player' && !cr?.playerAt ? { label: 'Do my cycle review', to: '/app/develop#cycle' } : view === 'parent' ? { label: 'See the cycle review', to: '/parent#cycle' } : undefined }; }
     case 'Paused': return { stage: p.state, what: 'Plan is paused.', why: 'No reps are due. Progress is saved.', who: 'parent', whoLabel: parent, unlocks: `Back to “${p.pausedFrom}”.`, action: view === 'parent' ? { label: 'Resume', cmd: { type: 'resume', playerId: p.id } } : undefined };
   }
 }
 
 // ---------- coach queue (routed to an owner) ----------
-export type QueueKind = 'Reply needed' | 'Sign-off' | 'Work ready' | 'Plan needed' | 'Activation' | 'Upcoming';
-export const QUEUE_KINDS: QueueKind[] = ['Reply needed', 'Sign-off', 'Work ready', 'Plan needed', 'Activation', 'Upcoming'];
+export type QueueKind = 'Reply needed' | 'Sign-off' | 'Work ready' | 'Cycle review' | 'Plan needed' | 'Promise' | 'Activation' | 'Upcoming';
+export const QUEUE_KINDS: QueueKind[] = ['Reply needed', 'Sign-off', 'Work ready', 'Cycle review', 'Plan needed', 'Promise', 'Activation', 'Upcoming'];
+/** Owed work, never "Upcoming". */
+export const OWED = (k: QueueKind) => k !== 'Upcoming';
 export interface QueueItem { key: string; kind: QueueKind; player: Player; ownerId: string; ownerName: string; what: string; why: string; unlocks: string; dueBy?: string; overdue: boolean; to: string }
 export function buildQueue(s: Snapshot, ownerId?: string): QueueItem[] {
   const t = clock(s).getTime(); const q: QueueItem[] = []; const head = headCoach(s)?.id ?? '';
-  const add = (kind: QueueKind, player: Player, owner: string, what: string, why: string, unlocks: string, to: string, dueBy?: string) => q.push({ key: kind + player.id, kind, player, ownerId: owner, ownerName: userName(s, owner), what, why, unlocks, to, dueBy, overdue: !!dueBy && new Date(dueBy).getTime() < t });
+  const add = (kind: QueueKind, player: Player, owner: string, what: string, why: string, unlocks: string, to: string, dueBy?: string, key?: string) => q.push({ key: key ?? kind + player.id, kind, player, ownerId: owner, ownerName: userName(s, owner), what, why, unlocks, to, dueBy, overdue: !!dueBy && new Date(dueBy).getTime() < t });
   for (const p of s.players) {
     const c = p.coachId; const um = unanswered(s, p.id); const fn = first(p.name);
-    if (um.length) { const m = um[0]; add('Reply needed', p, c, `${m.from === 'parent' ? family(s, p).parentName : fn}: “${m.text.slice(0, 64)}”${um.length > 1 ? ` (+${um.length - 1})` : ''}`, `Messages get the ${p.tier} reply window.`, 'Clears when you reply.', `/coach/player/${p.id}?tab=messages`, m.dueBy ?? undefined); }
+    const threads = new Map<string, typeof um>(); for (const m of um) { const k = `${m.context ?? 'general'}:${m.refId ?? ''}`; threads.set(k, [...(threads.get(k) ?? []), m]); }
+    for (const [k, ms] of threads) { const m = ms[0]; const ctx = m.context ?? 'general'; add('Reply needed', p, ctx === 'urgent' ? head : c, `${ctx === 'urgent' ? 'URGENT · ' : ctx === 'feedback' ? 'Question on feedback · ' : ctx === 'schedule' ? 'Schedule · ' : ''}${m.from === 'parent' ? family(s, p).parentName : fn}: “${m.text.slice(0, 64)}”${ms.length > 1 ? ` (+${ms.length - 1})` : ''}`, ctx === 'urgent' ? `Urgent: ${s.settings.urgentReplyHours ?? 4} office hours.` : `Messages get the ${p.tier} reply window (${tierReply(s, p)}).`, 'Clears when you reply in this thread.', `/coach/player/${p.id}?tab=messages&t=${encodeURIComponent(k)}`, m.dueBy ?? undefined, `reply:${p.id}:${k}`); }
     if (p.state === 'Sign-off') { const r = pendingReview(s, p.id); add('Sign-off', p, head, `${userName(s, r?.reviewerId)} reviewed: ${r?.decision === 'approve' ? 'Approve' : 'Another attempt'}`, 'Assistant reviews need head-coach sign-off before the family sees them.', `${fn} → ${r?.decision === 'approve' ? 'Next step ready' : 'Work ready'}`, `/coach/review/${p.id}`, lastSubmission(s, p.id)?.dueBy); }
     if (p.state === 'Submitted' || p.state === 'Feedback due') { const sub = lastSubmission(s, p.id); const a = s.assignments.find((x) => x.id === sub?.assignmentId); add('Work ready', p, c, `${a?.title} · ${sub?.repsDone}/${a?.reps} sets`, `Reply promised ${tierReply(s, p)} (${p.tier}).`, `${fn} → Next step ready (or another attempt).`, `/coach/review/${p.id}`, sub?.dueBy); }
-    if (p.state === 'Plan building' || p.state === 'Cycle review') add('Plan needed', p, c, p.state === 'Cycle review' ? `Cycle ${playerCycle(s, p.id)?.index} done. Pick the next focus.` : `Onboarded. Goal: “${p.goal}”.`, 'First plans are promised within 2 business days.', `${fn} → Plan set → rep 1.`, `/coach/plan/${p.id}`, addBusinessDays(new Date(p.stateSince), 2).toISOString());
+    const cyc = playerCycle(s, p.id); const crDone = p.state === 'Cycle review' && s.cycleReviews.some((x) => x.cycleId === cyc?.id && x.coachAt);
+    if (p.state === 'Cycle review' && !crDone) { const cr = s.cycleReviews.find((x) => x.cycleId === cyc?.id); add('Cycle review', p, c, `Cycle ${cyc?.index} done${cr?.playerAt ? ` · ${fn}: “${(cr.improved ?? '').slice(0, 48)}”` : ` · ${fn}’s reflection pending`}.`, 'Re-rate the rubric and pick the next focus before the next plan.', `${fn} → next focus → plan.`, `/coach/cycle/${p.id}`, addBusinessDays(new Date(p.stateSince), 2).toISOString()); }
+    if (p.state === 'Plan building' || crDone) add('Plan needed', p, c, crDone ? `Cycle review done. Build cycle ${(cyc?.index ?? 0) + 1}.` : `Onboarded. Goal: “${p.goal}”.`, 'Plans are promised within 2 business days.', `${fn} → Plan set → rep 1.`, `/coach/plan/${p.id}`, addBusinessDays(new Date(p.stateSince), 2).toISOString());
+    const covered = new Set(['reply-window', 'first-plan', 'rubric-cycle']);
+    for (const { promise, risk } of promiseRisks(s, p)) if (!covered.has(promise.id)) add('Promise', p, c, risk.what, `Promise: ${promise.text}`, 'Keeps the promise on the family’s card.', `/coach/player/${p.id}`, risk.dueBy, `promise:${promise.id}:${p.id}`);
     if (p.state === 'Onboarding') add('Activation', p, c, `${family(s, p).parentName} is onboarding${s.consents.some((x) => x.playerId === p.id) ? ' (consent on file)' : ' (consent pending)'}.`, 'Coaching starts once profile, goal, rhythm and consent are in.', 'Plan needed for you.', `/coach/player/${p.id}`);
     if (['Plan set', 'Work ready', 'Next step ready', 'Paused'].includes(p.state)) add('Upcoming', p, c, `${p.state}: ${fn} acts next.`, 'Nothing owed by you right now.', `Session ${new Date(p.nextSession + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}.`, `/coach/player/${p.id}`);
   }
@@ -125,7 +139,7 @@ export function buildOpsQueue(s: Snapshot): OpsItem[] {
       if (app?.next === 'call' && !call) add('Fit call to book', p, `${family(s, p).parentName} asked for a 15-min call.`, 'Families who ask for a call shouldn’t get an invite first.', 'Fit decision after the call.', addBusinessDays(new Date(app.at), 1).toISOString());
       else add('New application', p, `${p.tier} suggested · ${app?.answers.days ?? ''} · “${app?.answers.goal ?? p.goal}”`, `${capacity(s).open} spots open.`, 'Invite or waitlist.', addBusinessDays(new Date(p.stateSince), 2).toISOString());
     }
-    if (p.state === 'Invited' && inv) { if (inv.status === 'expired' || new Date(inv.expiresAt).getTime() < t) add('Invite expired', p, `Sent ${shortWhen(inv.sentAt)} to ${inv.email}.`, 'The spot is held but the link no longer works.', 'Resend a fresh link.', inv.expiresAt); else add('Invite pending', p, `Link sent to ${inv.email}. Code ${inv.code}.`, 'Nudge after 3 days.', 'Onboarding.', inv.expiresAt); }
+    if (p.state === 'Invited' && inv) { if (inv.status === 'expired' || new Date(inv.expiresAt).getTime() < t) add('Invite expired', p, `Sent ${shortWhen(inv.sentAt)} to ${inv.email}.`, 'The spot is held but the link no longer works.', 'Resend a fresh link.', inv.expiresAt); else add('Invite pending', p, `Link + code sent to ${inv.email}. (Stored hashed; resend to get a new one.)`, 'Nudge after 3 days.', 'Onboarding.', inv.expiresAt); }
     if (ON_ROSTER(p.state) && p.state !== 'Invited' && p.billing === 'unpaid') add('Payment', p, `${p.tier} · $${({ Foundation: 69, Development: 139, 'Inner Circle': 229 })[p.tier]}/mo marked unpaid.`, 'Billing is tracked manually until Stripe is connected.', 'Mark paid or comp.');
     if (p.state === 'Waitlist') add('Waitlist', p, `Waiting since ${shortWhen(p.stateSince)}.`, capacity(s).open > 0 ? `${capacity(s).open} spot(s) are open now.` : 'Roster is full.', 'Invite when a spot opens.');
   }
@@ -137,7 +151,7 @@ export function buildOpsQueue(s: Snapshot): OpsItem[] {
 export function teamLoad(s: Snapshot) {
   const q = buildQueue(s); const ops = buildOpsQueue(s);
   return staff(s).map((u) => {
-    const mine = u.role === 'ops' ? ops : q.filter((x) => x.ownerId === u.id && x.kind !== 'Upcoming');
+    const mine = u.role === 'ops' ? ops : q.filter((x) => x.ownerId === u.id && OWED(x.kind));
     return { user: u, players: s.players.filter((p) => p.coachId === u.id && ON_ROSTER(p.state)).length, open: mine.length, overdue: mine.filter((x) => x.overdue).length };
   });
 }

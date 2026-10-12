@@ -23,7 +23,7 @@ describe('multi-user API flow with real sessions', () => {
     const kaiC = await login(env, 'kai.rook', '4321', true);
     expect((await kaiC.cmd({ type: 'openPlan', playerId: kai })).status).toBe(200);
     expect((await kaiC.cmd({ type: 'submitRep', playerId: kai, repsDone: 3, reflection: 'Left hand felt better by set 3', linkUrl: 'https://example.com/clip' })).status).toBe(200);
-    expect((await asst.cmd({ type: 'review', playerId: kai, decision: 'approve', feedback: 'Good. Next: same speed, eyes on rim.' })).status).toBe(200);
+    expect((await asst.cmd({ type: 'review', playerId: kai, decision: 'approve', wentWell: 'Good. Next: same speed, eyes on rim.', adjust: 'Keep eyes up', why: 'It builds control' })).status).toBe(200);
     let me = (await kaiC.get('/api/snapshot')).body.snapshot; expect(me.players[0].state).toBe('Sign-off'); expect(me.reviews).toEqual([]); // family can't see the unsigned review
     expect((await asst.cmd({ type: 'signOff', playerId: kai, approve: true })).status).toBe(403);
     expect((await head.cmd({ type: 'signOff', playerId: kai, approve: true })).status).toBe(200);

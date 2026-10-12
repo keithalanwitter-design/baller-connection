@@ -1,5 +1,5 @@
 import type { Command, Snapshot, UserRole } from '../shared/domain';
-import { dispatch, id as newId, WorkflowError } from '../shared/engine';
+import { ConflictError, dispatch, id as newId, WorkflowError } from '../shared/engine';
 import { ENDPOINT_ROLES, PermissionError, SYSTEM, PUBLIC, canSeePlayer, scopeSnapshot, type Actor, type Endpoint } from '../shared/permissions';
 import { DEMO_PASSWORD, DEMO_PIN, seed } from '../shared/seed';
 import { buildOpsQueue, buildQueue, teamLoad, TRANSITIONS } from '../shared/workflow';
@@ -17,7 +17,7 @@ const SYSTEM_ONLY = new Set(['sweep', 'advanceClock']);
 export async function ensureSeeded(env: Env) {
   const repo = new Repo(env.DB); if (await repo.isSeeded()) return;
   if (env.SEED === 'demo' || env.DEMO === '1') { await seedDb(env.DB); return; }
-  const s = seed(); const empty = { ...s, users: [{ id: 'u_head', name: env.OWNER_NAME ?? 'Head Coach', email: (env.OWNER_EMAIL ?? 'owner@example.com').toLowerCase(), role: 'head' as const, active: true }], families: [], players: [], applications: [], invites: [], consents: [], cycles: [], assignments: [], submissions: [], reviews: [], messages: [], habits: [], milestones: [], digests: [], meetings: [], notifications: [], outbox: [], dataRequests: [], events: [] };
+  const s = seed(); const empty = { ...s, reflections: [], cycleReviews: [], users: [{ id: 'u_head', name: env.OWNER_NAME ?? 'Head Coach', email: (env.OWNER_EMAIL ?? 'owner@example.com').toLowerCase(), role: 'head' as const, active: true }], families: [], players: [], applications: [], invites: [], consents: [], cycles: [], assignments: [], submissions: [], reviews: [], messages: [], habits: [], milestones: [], digests: [], meetings: [], notifications: [], outbox: [], dataRequests: [], events: [] };
   await repo.save(empty); // owner sets a password with “First time / forgot password” (emailed link)
 }
 export async function seedDb(db: Db) {
@@ -30,9 +30,11 @@ export async function seedDb(db: Db) {
 export async function runCommand(env: Env, actor: Actor, cmd: Command) {
   await ensureSeeded(env); const repo = new Repo(env.DB); const prev = await repo.load(); const r = dispatch(prev, cmd, actor); await repo.save(r.snapshot, prev); await deliver(env); return r;
 }
+/** Once a real provider has the mail, the outbox copy no longer needs the invite/reset secret. (The Log provider keeps it: it IS the delivery in dev.) */
+export const redactSecrets = (b: string) => b.replace(/token=[A-Za-z0-9_-]+/g, 'token=[sent]').replace(/code \d{6}/g, 'code [sent]');
 export async function deliver(env: Env) {
   const repo = new Repo(env.DB); const p = makeProvider(env); const app = env.APP_URL ?? '';
-  for (const m of (await repo.queuedEmails()).results) { try { await repo.markEmail(m.id, await p.send({ to: m.to, subject: m.subject, body: m.body.replaceAll(' /invite', ` ${app}/#/invite`).replaceAll(' /reset', ` ${app}/#/reset`) })); } catch { await repo.markEmail(m.id, 'failed'); } }
+  for (const m of (await repo.queuedEmails()).results) { try { const st = await p.send({ to: m.to, subject: m.subject, body: m.body.replaceAll(' /invite', ` ${app}/#/invite`).replaceAll(' /reset', ` ${app}/#/reset`) }); await repo.markEmail(m.id, st); if (st === 'sent') await repo.setEmailBody(m.id, redactSecrets(m.body)); } catch { await repo.markEmail(m.id, 'failed'); } }
 }
 /** Cron: SLA/overdue sweep every run; weekly digests on the Sunday schedule; then a per-user notification email digest. */
 export async function scheduled(env: Env, cron: string) {
@@ -72,7 +74,8 @@ export async function handle(req: Request, env: Env): Promise<Response> {
       const b = await body<{ token?: string; code?: string; parentName: string; email: string; password: string }>();
       if (!b.password || b.password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
       if (await repo.userByLogin(b.email ?? '')) throw new HttpError(409, 'An account with that email exists. Sign in instead.');
-      const uid = newId('usr'); const r = await runCommand(env, PUBLIC, { type: 'acceptInvite', token: b.token, code: b.code, parentName: b.parentName, email: b.email, userId: uid });
+      const ipKey = `invite:${req.headers.get('cf-connecting-ip') ?? req.headers.get('x-forwarded-for') ?? 'local'}`; if ((await repo.recentFailures(ipKey)) >= 5) throw new HttpError(429, 'Too many attempts. Try again in 15 minutes.');
+      const uid = newId('usr'); const r = await runCommand(env, PUBLIC, { type: 'acceptInvite', token: b.token, code: b.code, parentName: b.parentName, email: b.email, userId: uid }).catch(async (e) => { if (e instanceof WorkflowError) await repo.recordFailure(ipKey); throw e; });
       const userId = r.created?.userId ?? uid; await repo.setCredential(userId, 'password_hash', await hashSecret(b.password));
       return json({ user: { id: userId, role: 'parent' }, playerId: r.created?.playerId }, 200, await startSession(userId));
     }
@@ -122,6 +125,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   } catch (e) {
     if (e instanceof HttpError) return json({ error: e.message }, e.status);
     if (e instanceof PermissionError) return json({ error: e.message }, 403);
+    if (e instanceof ConflictError) return json({ error: e.message, conflict: true }, 409);
     if (e instanceof WorkflowError) return json({ error: e.message }, 409);
     console.error(e); return json({ error: 'Server error' }, 500);
   }

@@ -72,19 +72,25 @@ await player.pg.getByRole('button', { name: 'Submit to coach' }).click(); await 
 
 // 6 · Assistant reviews → Sign-off (family can’t see it yet)
 await asst.go('/coach'); await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Work ready' }).click(); await asst.pg.waitForTimeout(300);
-await asst.pg.fill('#fb', 'Good tempo. Next: same speed, eyes on the rim.'); await asst.pg.getByRole('button', { name: /^Approve/ }).click(); await asst.gotIt();
-await player.pg.reload(); await player.pg.waitForTimeout(600); ok(/head coach finalizing/i.test(await player.pg.locator('main').innerText()), 'player sees “head coach finalizing” (same Sign-off state)');
+await asst.pg.fill('#f-wentWell', 'Good tempo all three sets'); await asst.pg.fill('#f-adjust', 'Same speed, eyes on the rim'); await asst.pg.fill('#f-why', 'Left-hand finishes win you minutes'); await asst.pg.getByRole('button', { name: /^Approve/ }).click(); await asst.gotIt();
+await player.pg.reload(); await player.pg.waitForTimeout(600); ok(/head coach checking/i.test(await player.pg.locator('main').innerText()), 'player sees “head coach checking it” (same Sign-off state)');
 
 // 7 · Head coach: inbox + sign-off queue item, signs off with an edit
 const head = await persona('head'); await head.login('head@demo.test', 'demo-pass-123');
-await head.go('/coach/inbox'); ok(await head.pg.locator('.nitem', { hasText: 'Sign-off needed' }).count() >= 1, 'head coach notified: sign-off needed'); await head.shot('25-inbox', false);
+await head.go('/coach/inbox'); ok(await head.pg.locator('.urow', { hasText: 'Sign-off needed' }).count() >= 1, 'head coach notified: sign-off needed'); await head.shot('25-inbox', false);
 await head.go('/coach'); ok(await head.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Sign-off' }).count() === 1, 'Sign-off routed to the head coach queue'); await head.shot('26-head-action-center');
 await head.pg.locator('.qrow', { hasText: 'Kai Rook' }).click(); await head.pg.waitForTimeout(300); await head.shot('27-signoff', false);
-await head.pg.fill('#ed', 'Good tempo. Next: same speed, eyes on the rim, finish high.'); await head.pg.getByRole('button', { name: /Sign off with edits/ }).click(); await head.gotIt();
+await head.pg.fill('#ed-adjust', 'Same speed, eyes on the rim, finish high'); await head.pg.getByRole('button', { name: /Sign off with edits/ }).click(); await head.gotIt();
 
 // 8 · Player sees the next step + notification
 await player.pg.reload(); await player.pg.waitForTimeout(700); const today = await player.pg.locator('main').innerText();
-ok(/New coach feedback is in/i.test(today) && /finish high/.test(today), 'player sees Next step ready + the signed-off feedback'); await player.shot('28-player-next-step');
+ok(/Approved/i.test(today) && /finish high/.test(today) && /What you did well/i.test(today), 'player sees Next step ready + the signed-off structured feedback'); await player.shot('28-player-next-step');
+// 8b · ❓ on feedback → thread tied to the feedback + Reply needed in the assigned coach's queue → reply
+await player.pg.getByRole('button', { name: '❓ Question' }).click(); await player.pg.locator('input[id^="q-"]').fill('Finish high on which side?'); await player.pg.getByRole('button', { name: 'Ask' }).click(); await player.pg.waitForTimeout(600);
+await asst.go('/coach'); const qrow = asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Question on feedback' }); ok(await qrow.count() === 1, 'live: question on feedback → Reply needed in the assistant’s queue');
+await qrow.click(); await asst.pg.waitForTimeout(500); await asst.pg.fill('#msg', 'Both. Left first.'); await asst.pg.getByRole('button', { name: 'Send' }).click(); await asst.pg.waitForTimeout(500);
+await asst.go('/coach'); ok(await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Question on feedback' }).count() === 0, 'live: reply in the feedback thread clears it');
+await player.go('/app/inbox'); ok(/Feedback:/.test(await player.pg.locator('main').innerText()), 'live: player inbox shows the feedback thread');
 ok((await player.api('/api/notifications')).some((n) => n.type === 'feedback_ready'), 'player has a feedback_ready notification');
 
 // 9 · Digest: coach approves, parent sees it + account/privacy tools
