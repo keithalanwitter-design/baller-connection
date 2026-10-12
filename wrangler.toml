@@ -19,6 +19,9 @@ DEMO = "0"
 STRIPE_PRICE_FOUNDATION = ""
 STRIPE_PRICE_DEVELOPMENT = ""
 STRIPE_PRICE_INNER_CIRCLE = ""
+# v7 Web Push (optional; empty = log mode). Generate with: node scripts/vapid-keys.mjs. The private key goes in `wrangler secret put VAPID_PRIVATE_KEY`.
+VAPID_PUBLIC_KEY = ""
+VAPID_SUBJECT = ""
 # Secrets (never in this file):
 #   wrangler secret put SESSION_SECRET
 #   wrangler secret put RESEND_API_KEY        (or POSTMARK_SERVER_TOKEN)

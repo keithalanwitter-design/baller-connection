@@ -18,6 +18,9 @@ import { lastReview, OWED } from '../../shared/workflow';
 import { ClipPlayer, NoteList, fmtSpent, useReviewTimer } from '../v5';
 import { fmtT } from '../../shared/clips';
 import { CoachBilling, Outbox } from '../v6';
+import { GamesList, PressureBadge, ShotSummary, Timeline, TransferBadge, WinsWall } from '../v7';
+import { shotsFor, transferCue } from '../../shared/games';
+import { PRESSURE_LABEL, type Pressure } from '../../shared/domain';
 
 const k = (x: string) => x.split(' ')[0].toLowerCase().replace(/[^a-z]/g, '');
 const download = (name: string, text: string, type = 'text/csv') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); };
@@ -107,7 +110,7 @@ function Review() {
       <div className="reviewgrid">
         <section className="panel rv-left"><p className="kicker">Submitted {shortWhen(sub.at)} · {a.title} · <b>{sub.repsDone}/{a.reps}</b> sets</p>
           {clip ? <ClipPlayer clip={clip} onNote={p.state === 'Sign-off' ? undefined : addNote} playerRef={vid} /> : sub.clipId ? <p className="small dim">🎥 Clip removed.</p> : <p className="small dim">No clip this time: reps and reflection only.</p>}
-          <blockquote className="quote sm">“{sub.reflection}”</blockquote>{sub.linkUrl && <a className="attach" href={sub.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {sub.linkUrl}</a>}
+          <blockquote className="quote sm">“{sub.reflection}”</blockquote><PressureBadge pr={a.pressure} /><ShotSummary shots={sub.shots} />{sub.linkUrl && <a className="attach" href={sub.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {sub.linkUrl}</a>}
           <p className="small"><b>In their words:</b> {coachKnows(p) || '—'}</p>{p.canvas && <p className="small dim"><b>Your canvas:</b> {p.canvas}</p>}
           {prev && <details><summary className="small">Previous feedback ({shortWhen(prev.at)})</summary><FeedbackCard p={p} r={prev} me="coach" compact /></details>}
         </section>
@@ -147,7 +150,7 @@ function Review() {
 function AdjustPlan({ p }: { p: Player }) {
   const s = useSnap(); const { run } = useStore(); const c = playerCycle(s, p.id); const [open, setOpen] = useState(false); const [note, setNote] = useState(''); const [add, setAdd] = useState('');
   if (!c || c.status !== 'active' || !['Plan set', 'Work ready', 'Submitted', 'Feedback due', 'Sign-off', 'Next step ready'].includes(p.state)) return null;
-  return <section className="panel"><div className="row between"><h3 className="display">Plan</h3><span className="small dim">{c.adjustedAt ? `Adjusted ${shortWhen(c.adjustedAt)}` : `Set ${shortWhen(c.startAt)}`} · cycle review {shortWhen(c.endAt)}</span></div>
+  return <section className="panel" id="adjust"><div className="row between"><h3 className="display">Plan</h3><span className="small dim">{c.adjustedAt ? `Adjusted ${shortWhen(c.adjustedAt)}` : `Set ${shortWhen(c.startAt)}`} · cycle review {shortWhen(c.endAt)}</span></div>
     {!open ? <button className="btn sm ghost" onClick={() => setOpen(true)}>Adjust plan</button> : <form onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'adjustPlan', playerId: p.id, note, addDrillIds: add ? [add] : [] })) { setOpen(false); setNote(''); setAdd(''); } }}>
       <label htmlFor="an">What changed and why (the family sees this)</label><input id="an" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Adding tempo work: control is there now" />
       <label htmlFor="ad">Add a rep (optional)</label><select id="ad" className="input" value={add} onChange={(e) => setAdd(e.target.value)}><option value="">— none —</option>{s.drills.filter((d) => !d.archived).map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}</select>
@@ -166,6 +169,7 @@ function CycleReviewCoach() {
     <Back to={`/coach/player/${p.id}`}>{p.name}</Back>
     <h1 className="display">Cycle {c.index} review: {p.name}</h1>
     <p className="dim">Focus was “{c.focus}” · {subs.length} check-ins · {appr} approved · {shortWhen(c.startAt)} → {shortWhen(c.endAt)}</p>
+    <section className="panel"><p className="kicker">Did it show up in games?</p><TransferBadge p={p} cycleId={c.id} big /><p className="small dim">From {first(p.name)}’s post-game check-ins. Low transfer is a cue for pressure reps next cycle.</p></section>
     <div className="grid2">
       <section className="panel"><p className="kicker">{first(p.name)}’s reflection</p>{cr?.playerAt ? <dl className="dl"><div><dt>Improved</dt><dd>{cr.improved}</dd></div><div><dt>Hardest</dt><dd>{cr.hardest}</dd></div><div><dt>Wants next</dt><dd>{cr.wantNext}</dd></div></dl> : <p className="dim">Not in yet. {first(p.name)} sees “Do my cycle review” on Today. You can go ahead without it.</p>}
         <p className="kicker">In their words</p><p>{coachKnows(p)}</p></section>
@@ -210,16 +214,27 @@ function StaffBox({ p }: { p: Player }) {
   </section>;
 }
 
+function GamesTab({ p }: { p: Player }) {
+  const s = useSnap(); const { run } = useStore(); const tc = transferCue(s, p); const logs = shotsFor(s, p.id).slice(-3).reverse();
+  return <>
+    {tc && <section className="panel riskbox" id="transfer-cue"><p className="kicker">Game transfer cue</p><p><b>Practice isn’t carrying into games yet.</b> {tc.label} for “{tc.cycle.focus}”.</p>
+      <p className="small">Try a pressure rep (counted, on the clock, with a defender, or on tired legs) so the reps look like the game, or give one game cue in your next reply.</p>
+      <div className="row gap wrapx"><Link className="btn sm" to={`/coach/player/${p.id}?tab=overview#adjust`}>Add a pressure rep</Link><button className="link small" onClick={() => run({ type: 'addNote', playerId: p.id, kind: 'cue', text: 'Handled in conversation' })}>Mark handled</button></div></section>}
+    <section className="panel"><div className="row between wrapx"><h3 className="display">Games</h3><span className="small dim">Light items: no reply owed unless {first(p.name)} asks (one game a week).</span></div><TransferBadge p={p} big /><GamesList p={p} me="coach" /></section>
+    {logs.length > 0 && <section className="panel"><h3 className="display">Shooting logs</h3>{logs.map((x) => <ShotSummary key={x.id} shots={x.shots} title={`${s.assignments.find((a) => a.id === x.assignmentId)?.title ?? 'Rep'} · ${shortWhen(x.at)}`} />)}</section>}
+  </>;
+}
+
 function Profile() {
   const { id } = useParams(); const [sp, setSp] = useSearchParams(); const s = useSnap(); const { run, as } = useStore(); const base = useBase(); const view = perspective(as?.role);
   const p = s.players.find((x) => x.id === id); const tab = sp.get('tab') || 'overview';
   if (!p) return <p>Player not found. <Link to={`${base}/roster`}>Roster</Link></p>;
-  const app = s.applications.find((a) => a.playerId === p.id); const tabs = view === 'ops' ? ['overview', 'timeline'] : ['overview', 'canvas', 'messages', 'feedback', 'timeline'];
+  const app = s.applications.find((a) => a.playerId === p.id); const tabs = view === 'ops' ? ['overview', 'timeline'] : ['overview', 'games', 'progress', 'canvas', 'messages', 'feedback', 'timeline'];
   return (<>
     <Back to={`${base}/roster`}>Roster</Back>
     <div className="row between wrapx"><div><h1 className="display">{p.name}</h1><p className="dim">{p.age} · {p.position || '—'} · {p.tier} · Parent: {family(s, p).parentName} · Coach: {userName(s, p.coachId)}</p></div><Pill state={p.state} /></div>
     <Track state={p.state} />
-    <div className="seg light" role="tablist">{tabs.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setSp({ tab: t })}>{t === 'canvas' ? 'Player canvas' : t === 'feedback' ? 'Feedback history' : t[0].toUpperCase() + t.slice(1)}</button>)}</div>
+    <div className="seg light" role="tablist">{tabs.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setSp({ tab: t })}>{t === 'canvas' ? 'Player canvas' : t === 'feedback' ? 'Feedback history' : t === 'timeline' ? 'Activity log' : t[0].toUpperCase() + t.slice(1)}</button>)}</div>
     {view !== 'ops' && promiseRisks(s, p).length > 0 && <section className="panel riskbox"><p className="kicker">Promises to keep</p><ul className="plain">{promiseRisks(s, p).map(({ promise, risk }) => <li key={promise.id}>🛡️ <b>{risk.what}</b>{risk.dueBy ? ` · by ${shortWhen(risk.dueBy)}` : ''} <span className="small dim">({promise.text})</span></li>)}</ul></section>}
     {tab === 'overview' && <div className="grid2">
       <div><PathPanel p={p} role={view} />{view === 'coach' && <AdjustPlan p={p} />}<StaffBox p={p} />
@@ -229,6 +244,8 @@ function Profile() {
     {tab === 'canvas' && <section className="panel canvas"><p className="kicker">Coach only. Never shown to the family or ops.</p><label htmlFor="cv" className="strong">How {first(p.name)} ticks</label><textarea id="cv" className="input" rows={6} defaultValue={p.canvas} onBlur={(e) => run({ type: 'updateCanvas', playerId: p.id, canvas: e.target.value })} placeholder="Motivation, triggers, what cues land, family context…" /><p className="small dim">Saves when you leave the field.</p></section>}
     {tab === 'messages' && <UnifiedInbox players={[p]} me="coach" fixedPlayer />}
     {tab === 'feedback' && <FeedbackTimeline p={p} me="coach" />}
+    {tab === 'games' && <GamesTab p={p} />}
+    {tab === 'progress' && <><Timeline p={p} me="coach" /><WinsWall p={p} me="coach" /></>}
     {tab === 'timeline' && <ol className="events">{s.events.filter((e) => e.playerId === p.id).slice().reverse().map((e) => <li key={e.id} className="ev"><time>{shortWhen(e.at)}</time><span className={`who-tag ${e.role}`}>{e.actorId ? first(userName(s, e.actorId)) : e.role}</span><span className="grow">{e.from && e.to ? <span className="tr">{e.from} → <b>{e.to}</b> </span> : <b>{e.type} </b>}<span className="dim">{e.detail}</span></span></li>)}</ol>}
   </>);
 }
@@ -270,18 +287,20 @@ function Digest() {
 }
 
 function Library() {
-  const s = useSnap(); const { run } = useStore(); const blank = { title: '', reps: 3, minutes: 10, cues: [''], tags: [] as string[] }; const [f, setF] = useState<typeof blank & { id?: string }>(blank); const [arch, setArch] = useState(false);
+  const s = useSnap(); const { run } = useStore(); const blank = { title: '', reps: 3, minutes: 10, cues: [''], tags: [] as string[], pressure: null as Pressure | null }; const [f, setF] = useState<typeof blank & { id?: string }>(blank); const [arch, setArch] = useState(false);
   const save = async () => { if (await run({ type: 'saveDrill', drill: { ...f, cues: f.cues.filter((c) => c.trim()) } })) setF(blank); };
-  const edit = (d: Drill) => setF({ id: d.id, title: d.title, reps: d.reps, minutes: d.minutes, cues: [...d.cues, ''], tags: d.tags });
+  const edit = (d: Drill) => setF({ id: d.id, title: d.title, reps: d.reps, minutes: d.minutes, cues: [...d.cues, ''], tags: d.tags, pressure: d.pressure ?? null });
   return (<><h1 className="display">Drill library</h1><p className="dim">Reusable reps for every plan. Editing a drill changes future plans only; reps already assigned keep their wording.</p>
     <div className="grid2">
-      <div>{s.drills.filter((d) => d.archived === arch).map((d) => <section key={d.id} className="panel drill"><div className="row between"><strong>{d.title}</strong><span className="small dim">{d.reps} sets · {d.minutes} min</span></div><ul className="cues">{d.cues.map((c) => <li key={c}>{c}</li>)}</ul>
+      <div>{s.drills.filter((d) => d.archived === arch).map((d) => <section key={d.id} className="panel drill"><div className="row between"><strong>{d.title}</strong><span className="small dim">{d.reps} sets · {d.minutes} min</span></div><ul className="cues">{d.cues.map((c) => <li key={c}>{c}</li>)}</ul><PressureBadge pr={d.pressure} />
         <div className="row gap"><span className="small dim grow">{d.tags.map((t) => `#${t}`).join(' ')} · by {first(userName(s, d.createdBy))} · used {s.assignments.filter((a) => a.drillId === d.id).length}×</span><button className="chip" onClick={() => edit(d)}>Edit</button><button className="chip" onClick={() => run({ type: 'archiveDrill', drillId: d.id })}>{d.archived ? 'Restore' : 'Archive'}</button></div></section>)}
         <button className="link small" onClick={() => setArch(!arch)}>{arch ? '← Active drills' : 'Show archived'}</button></div>
       <div><form className="panel sticky" onSubmit={(e) => { e.preventDefault(); save(); }}><h3 className="display">{f.id ? 'Edit drill' : 'New drill'}</h3>
         <label htmlFor="dt">Title</label><input id="dt" className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
         <div className="row gap"><label>Sets <input className="input" type="number" min={1} max={20} value={f.reps} onChange={(e) => setF({ ...f, reps: +e.target.value })} /></label><label>Minutes <input className="input" type="number" min={1} max={90} value={f.minutes} onChange={(e) => setF({ ...f, minutes: +e.target.value })} /></label></div>
         <p className="strong">Cues</p>{f.cues.map((c, i) => <input key={i} aria-label={`Cue ${i + 1}`} className="input" value={c} onChange={(e) => { const cues = f.cues.map((x, j) => (j === i ? e.target.value : x)); if (i === cues.length - 1 && e.target.value) cues.push(''); setF({ ...f, cues }); }} placeholder="One short cue" />)}
+        <label htmlFor="pk">Pressure rep (bridges practice and games)</label><select id="pk" className="input" value={f.pressure?.kind ?? ''} onChange={(e) => setF({ ...f, pressure: e.target.value ? { kind: e.target.value as Pressure['kind'], target: f.pressure?.target ?? '' } : null })}><option value="">Regular rep</option>{(Object.keys(PRESSURE_LABEL) as Pressure['kind'][]).map((k) => <option key={k} value={k}>{PRESSURE_LABEL[k]}</option>)}</select>
+        {f.pressure && <><label htmlFor="pt">Target</label><input id="pt" className="input" value={f.pressure.target} onChange={(e) => setF({ ...f, pressure: { ...f.pressure!, target: e.target.value } })} placeholder="Make 7 of 10 before moving on · 30 seconds per set · after 2 sprints" /></>}
         <label htmlFor="tg">Tags (comma separated)</label><input id="tg" className="input" value={f.tags.join(', ')} onChange={(e) => setF({ ...f, tags: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} />
         <div className="row gap"><button className="btn" disabled={!f.title.trim()}>{f.id ? 'Save changes' : 'Add to library'}</button>{f.id && <button type="button" className="link" onClick={() => setF(blank)}>Cancel</button>}</div></form>
         <section className="panel"><h3 className="display">Plan templates</h3>{s.templates.map((t) => <p key={t.id}><strong>{t.name}</strong><span className="small dim block">{t.focus} · {t.drillIds.map((d) => s.drills.find((x) => x.id === d)?.title).filter(Boolean).join(' → ')}</span></p>)}<p className="small dim">Save a template from the plan builder.</p></section></div>

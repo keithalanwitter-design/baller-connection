@@ -3,6 +3,7 @@ import { addBusinessDays, shortWhen, weekKey } from './time';
 import { CLIP_MAX_MB, CLIP_MAX_SEC, CLIP_RETENTION_DAYS } from './clips';
 import { capacity, clock, lastSubmission, playerCycle, unanswered } from './workflow';
 import { graceEnds, subscriptionOf } from './billing';
+import { confidenceDip } from './games';
 
 /**
  * The promise ledger. Every promise the product makes in public copy, onboarding or email lives here,
@@ -181,6 +182,23 @@ export const PROMISES: ProgramPromise[] = [
     id: 'data-30d', text: 'Export or delete requests are completed within 30 days.', sources: ['Privacy', 'Parent Account'], tiers: ALL, kind: 'engine',
     rule: 'requestData creates an ops queue item due in 30 days.', familyScreen: 'Parent Account', coachAlert: 'Ops queue “Data request”',
     status: (s, p) => { const r = s.dataRequests.find((x) => x.playerId === p.id && x.status === 'open'); return r ? on(`${r.kind === 'delete' ? 'Deletion' : 'Export'} by ${shortWhen(new Date(ms(r.at) + 30 * D).toISOString())}`) : null; }, risk: () => null,
+  },
+  {
+    id: 'game-reply', text: 'Log a game and your coach sees it. Ask for feedback on one game a week and it gets a written reply in your usual reply window (it doesn’t use a weekly review).', sources: ['Games', 'Home'], tiers: ALL, kind: 'engine',
+    rule: 'logGame notifies the coach and adds a light queue item; wantsReply stamps dueBy = replyDue(tier) and the item becomes owed (“Game check-in”); one ask per week.', familyScreen: 'Games tab: “Coach replies by …” on the logged game', coachAlert: 'Queue “Game check-in” with dueBy; overdue sorts first',
+    status: (s, p) => { const g = (s.games ?? []).filter((x) => x.playerId === p.id && x.wantsReply && !x.reply).sort((a, b) => b.at.localeCompare(a.at))[0]; if (!g?.dueBy) return null; const st = dueState(s, g.dueBy); return { state: st, label: st === 'missed' ? `Game feedback was due ${shortWhen(g.dueBy)}. Your coach has been alerted.` : `Game feedback due by ${shortWhen(g.dueBy)}` }; },
+    risk: (s, p) => { const g = (s.games ?? []).find((x) => x.playerId === p.id && x.wantsReply && !x.reply && x.dueBy && dueState(s, x.dueBy) !== 'on-track'); return g ? { what: `Reply to ${p.name}’s game log`, dueBy: g.dueBy! } : null; },
+  },
+  {
+    id: 'confidence-check', text: 'If game confidence drops two games in a row, your coach is told and checks in. It’s a private nudge to the coach, never a grade.', sources: ['Games', 'Home'], tiers: ALL, kind: 'engine',
+    rule: 'logGame runs confidenceDip (3 games, each lower); the coach gets a notification and a “Confidence” queue item until they reply to or mark the game seen. Families never see a flag.', familyScreen: 'Games tab (the coach’s reply)', coachAlert: 'Queue “Confidence” + notification',
+    status: () => null,
+    risk: (s, p) => { const d = confidenceDip(s, p.id); return d && !d.last.seenAt && !d.last.reply && ACTIVE(p) ? { what: `Check in with ${p.name} (confidence dipped two games in a row)` } : null; },
+  },
+  {
+    id: 'card-private', text: 'Player Cards are private: no link exists until a parent turns it on, the parent can turn it off or replace it anytime, under-13s show a first name only, and no stats are shown unless the parent opts in.', sources: ['Parent', 'Privacy'], tiers: ALL, kind: 'engine',
+    rule: 'setCard is parent-only; the token lives on the player (redacted for everyone but the parent); GET /api/card/:token answers 404 unless enabled; publicCard() omits stats unless showStats and uses first name only under 13.', familyScreen: 'Parent → Player Card', coachAlert: '—',
+    status: (_s, p) => (ACTIVE(p) ? ok(p.card?.enabled ? `Card link on${p.card.showStats ? ' · stats shown' : ' · no stats'}` : 'Player Card is private (no link)') : null), risk: () => null,
   },
   {
     id: 'real-coach', text: 'A real coach you know by name writes every plan, review and reply, never an AI. Assistant reviews are checked by the head coach.', sources: ['Home'], tiers: ALL, kind: 'engine',

@@ -1,4 +1,4 @@
-import type { Assignment, Snapshot } from './domain';
+import type { Assignment, Game, Snapshot } from './domain';
 import { LIBRARY } from './library';
 export const DEMO_PASSWORD = 'demo-pass-123'; export const DEMO_PIN = '1234';
 export const DEMO_USERS = { head: 'u_head', assistant: 'u_asst', ops: 'u_ops' };
@@ -10,6 +10,7 @@ import { composeFeedback } from './personal';
 
 /** Fictional demo data. Times are relative to `base` so the demo always looks current. */
 export function seed(base = new Date()): Snapshot {
+  const G = (id: string, playerId: string, daysAgo: number, cycleId: string | null, opponent: string, stats: Game['stats'], confidence: number, focus: number, energy: number, wellDone: string, replay: string, focusTried: Game['focusTried'], seen: boolean): Game => ({ id, playerId, date: isoDay(new Date(base.getTime() - daysAgo * 864e5)), at: new Date(base.getTime() - daysAgo * 864e5 + 3 * 36e5).toISOString(), opponent, stats, confidence, focus, energy, wellDone, replay, focusTried, cycleId, focusText: cycleId ? { c_avery: 'Weak-hand control under pressure', c_riley: 'Catch-and-shoot rhythm' }[cycleId] ?? null : null, wantsReply: false, dueBy: null, seenAt: seen ? new Date(base.getTime() - (daysAgo - 1) * 864e5).toISOString() : null, seenBy: seen ? 'u_head' : null, reply: null });
   const h = (hrs: number) => new Date(base.getTime() - hrs * 36e5).toISOString();
   const d = (days: number) => isoDay(new Date(base.getTime() + days * 864e5));
   const A = (id: string, pid: string, cyc: string, order: number, li: number, status: Assignment['status']): Assignment => ({ id, playerId: pid, cycleId: cyc, order, status, drillId: `d${li + 1}`, ...LIBRARY[li] });
@@ -34,7 +35,9 @@ export function seed(base = new Date()): Snapshot {
       { id: 'u_nia', name: 'Nia Fable', username: 'nia.fable', role: 'player', playerId: 'nia', familyId: 'f_fable', active: true },
       { id: 'u_sam', name: 'Sam Quill', username: 'sam.quill', role: 'player', playerId: 'sam', familyId: 'f_quill', active: true },
     ],
-    drills: LIBRARY.map((l, i) => ({ id: `d${i + 1}`, ...l, tags: [['handles'], ['finishing'], ['shooting'], ['defense'], ['handles', 'shooting'], ['self-check']][i], createdBy: 'u_head', archived: false })),
+    drills: [...LIBRARY.map((l, i) => ({ id: `d${i + 1}`, ...l, tags: [['handles'], ['finishing'], ['shooting'], ['defense'], ['handles', 'shooting'], ['self-check']][i], createdBy: 'u_head', archived: false })),
+      { id: 'd7', title: 'Pressure finish: make it to move on', reps: 4, minutes: 12, cues: ['Game speed from the first rep', 'Left hand only', 'Two misses in a row = start the set over'], tags: ['finishing', 'pressure'], createdBy: 'u_head', archived: false, pressure: { kind: 'counted', target: 'Make 4 of 5 left-hand finishes to finish the set' } },
+    ],
     templates: [{ id: 't1', name: 'Weak-hand starter (4 wk)', focus: 'Weak-hand control under pressure', drillIds: ['d1', 'd2', 'd6'], createdBy: 'u_head' }, { id: 't2', name: 'Shooter’s rhythm', focus: 'Catch-and-shoot rhythm', drillIds: ['d3', 'd5'], createdBy: 'u_head' }],
     consents: ['avery', 'riley', 'sam', 'nia'].map((pid) => ({ id: `cs_${pid}`, playerId: pid, guardianName: { avery: 'Dana Pine', riley: 'Chris Moss', sam: 'Jo Quill', nia: 'Ray Fable' }[pid]!, userId: `u_${{ avery: 'dana', riley: 'chris', sam: 'jo', nia: 'ray' }[pid]}`, version: '2026-10b', text: 'Seeded consent', at: h(300) })),
     meetings: [
@@ -42,6 +45,28 @@ export function seed(base = new Date()): Snapshot {
       { id: 'mt2', playerId: 'avery', staffId: 'u_head', at: new Date(base.getTime() + 72 * 36e5).toISOString(), minutes: 20, kind: 'check-in', note: 'Monthly video check-in', status: 'scheduled' },
     ],
     notifications: [], outbox: [], dataRequests: [], billingEvents: [],
+    // v7: fictional game logs. Avery's focus is starting to show up in games; Riley's isn't yet (transfer cue) and confidence dipped twice (coach-only flag).
+    games: [
+      G('g_av1', 'avery', 20, null, 'Eastside Hawks', { pts: 4, reb: 3, ast: 2, fgm: 2, fga: 9 }, 2, 3, 3, 'Hustled back on defense every time', 'Lost the ball driving left', null, true),
+      G('g_av2', 'avery', 8, 'c_avery', 'Lakeview', { pts: 6, reb: 4, ast: 3, fgm: 3, fga: 8 }, 3, 3, 4, 'Two good passes off the dribble', 'Picked up my dribble when they trapped', 'not_yet', true),
+      G('g_av3', 'avery', 5, 'c_avery', 'Westbrook', { pts: 7, reb: 2, ast: 4, fgm: 3, fga: 7 }, 3, 4, 4, 'Stayed low on the press break', 'Rushed a left-hand layup', 'sometimes', true),
+      G('g_av4', 'avery', 2, 'c_avery', 'North Park', { pts: 9, reb: 3, ast: 2, fgm: 4, fga: 8 }, 4, 4, 4, 'Went left twice and finished one through contact', 'A turnover on the first trap', 'yes', false),
+      G('g_ri1', 'riley', 9, 'c_riley', 'Central', { pts: 11, reb: 5, ast: 1, fgm: 4, fga: 9, tpm: 2, tpa: 5 }, 4, 4, 4, 'Two catch-and-shoot threes in the first half', 'Hesitated on an open look', 'sometimes', true),
+      G('g_ri2', 'riley', 6, 'c_riley', 'St. Mark', { pts: 5, reb: 6, ast: 2, fgm: 2, fga: 8, tpm: 0, tpa: 4 }, 3, 3, 3, 'Boxed out every possession', 'Passed up two open threes', 'not_yet', true),
+      G('g_ri3', 'riley', 1, 'c_riley', 'Riverside', { pts: 4, reb: 4, ast: 3, fgm: 2, fga: 7, tpm: 0, tpa: 3 }, 2, 3, 3, 'Three assists off the drive', 'Feet were late on the catch again', 'not_yet', false),
+    ],
+    wins: [
+      { id: 'w_av1', playerId: 'avery', at: h(48), kind: 'best', text: 'Personal best: 9 points vs North Park', refId: 'g_av4', by: null, key: 'best:pts:9' },
+      { id: 'w_av2', playerId: 'avery', at: h(48), kind: 'focus', text: 'Took the focus into a game: Weak-hand control under pressure', refId: 'g_av4', by: null, key: 'focus:c_avery' },
+      { id: 'w_av3', playerId: 'avery', at: h(40), kind: 'coach', text: 'Finished left through contact vs North Park. That’s the work showing up.', refId: 'g_av4', by: 'u_head', key: 'coach:seed1' },
+      { id: 'w_av4', playerId: 'avery', at: h(100), kind: 'coach', text: 'Read the switch and stayed low: first approved rep.', refId: 'r_av1', by: 'u_head', key: 'coach:seed2' },
+      { id: 'w_ri1', playerId: 'riley', at: h(72), kind: 'streak', text: '3-day habit streak', refId: null, by: null, key: 'streak:3' },
+    ],
+    timelineNotes: [
+      { id: 'tn_av1', playerId: 'avery', kind: 'annotation', refId: 'g_av4', date: d(-2), text: 'First game the left hand showed up under pressure.', status: 'approved', by: 'u_head', at: h(40) },
+      { id: 'tn_av2', playerId: 'avery', kind: 'annotation', refId: 'g_av1', date: d(-20), text: 'Before the focus: avoided the left hand all game.', status: 'approved', by: 'u_head', at: h(40) },
+      { id: 'tn_av3', playerId: 'avery', kind: 'story', refId: 'c_avery', date: d(-1), text: 'Since we set the focus on weak-hand control, Avery has gone from avoiding the left hand in games to trying it in most of them, and game confidence is up from 2 to 4. Why: three slow walk-through reps before game speed gave the left hand a pattern to trust. Next: the same move when the trap comes.', status: 'approved', by: 'u_head', at: h(24) },
+    ],
     // v6: Stripe test-mode subscriptions for the two paying demo families (ids are fake; nothing is charged).
     subscriptions: [
       { id: 'subn_avery', playerId: 'avery', familyId: 'f_pine', tier: 'Development', status: 'active', customerId: 'cus_test_pine', subscriptionId: 'sub_test_avery', currentPeriodEnd: new Date(base.getTime() + 18 * 864e5).toISOString(), cancelAtPeriodEnd: false, pastDueSince: null, pausedByBilling: false, startedAt: h(300), updatedAt: h(300) },
@@ -74,7 +99,7 @@ export function seed(base = new Date()): Snapshot {
       { id: 's_av1', assignmentId: 'a_av1', playerId: 'avery', repsDone: 6, reflection: 'Lost it on the switch twice. Better when I stayed low.', at: h(120), dueBy: addBusinessDays(new Date(h(120)), 1).toISOString(), reviewed: true },
       { id: 's_av2', assignmentId: 'a_av2', playerId: 'avery', repsDone: 3, reflection: 'Kept bringing it back to my right hand.', at: h(60), dueBy: addBusinessDays(new Date(h(60)), 1).toISOString(), reviewed: true },
       // Riley's same-day SLA was missed (seeded) so the demo shows overdue escalation.
-      { id: 's_ri1', assignmentId: 'a_ri1', playerId: 'riley', repsDone: 5, reflection: 'Made 7/10 at four spots, stuck at 5/10 on the left wing. Feet felt late.', clipId: 'clip_riley', at: h(30), dueBy: h(3), reviewed: true },
+      { id: 's_ri1', assignmentId: 'a_ri1', playerId: 'riley', repsDone: 5, reflection: 'Made 7/10 at four spots, stuck at 5/10 on the left wing. Feet felt late.', clipId: 'clip_riley', at: h(30), dueBy: h(3), reviewed: true, shots: [[7, 10], [5, 10], [7, 10], [7, 10], [6, 10]] },
       { id: 's_ni1', assignmentId: 'a_ni1', playerId: 'nia', repsDone: 6, reflection: 'Eyes up the whole time on the last 3 sets.', at: h(150), dueBy: addBusinessDays(new Date(h(150)), 1).toISOString(), reviewed: true },
       { id: 's_ni2', assignmentId: 'a_ni2', playerId: 'nia', repsDone: 6, reflection: 'Hesitation worked better than the crossover.', at: h(30), dueBy: addBusinessDays(new Date(h(30)), 1).toISOString(), reviewed: true },
     ],

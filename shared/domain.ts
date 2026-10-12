@@ -1,4 +1,4 @@
-// Baller Connection domain model (v6). Shared by the browser demo engine, the API server and tests.
+// Baller Connection domain model (v7). Shared by the browser demo engine, the API server and tests.
 export type Tier = 'Foundation' | 'Development' | 'Inner Circle';
 /** Account roles. `system` is the cron/scheduler. */
 export type UserRole = 'head' | 'assistant' | 'ops' | 'parent' | 'player';
@@ -41,18 +41,23 @@ export interface Player {
   /** Optimistic-concurrency version: bumped on every state change. */ rev: number;
   frustration: string; proudOf: string; /** "Coach knows you": the player's own words, editable by the player. */ aboutMe: string; tournamentDate?: string | null;
   /** “What I’m working on”: one sentence in the player’s words, renewed weekly. */ workingOn?: string | null; workingOnWeek?: string | null;
+  /** v7: the player's own pre-game affirmation (game plan card). */ affirmation?: string | null;
+  /** v7: shareable Player Card, controlled by the parent. Off by default; stats hidden unless the parent opts in. */ card?: CardSettings | null;
 }
 export interface Application { id: string; at: string; playerId: string; answers: Record<string, string>; tier: Tier; fit: 'fit' | 'waitlist' | 'notyet'; next: 'apply' | 'call' | 'waitlist' }
 export interface Invite { id: string; playerId: string; email: string; /** sha256 of the link token; plaintext only ever appears in the sent email */ tokenHash: string; codeHash: string; sentAt: string; expiresAt: string; createdBy: string; acceptedAt?: string | null; acceptedBy?: string | null; status: 'pending' | 'accepted' | 'expired' | 'revoked'; /** v6: 'offer' = a waitlist spot offer with a short expiry */ kind?: 'invite' | 'offer' | null }
 export interface Consent { id: string; playerId: string; guardianName: string; userId: string; version: string; text: string; at: string }
 export interface Cycle { id: string; playerId: string; index: number; focus: string; startAt: string; endAt: string; status: 'active' | 'review' | 'closed'; templateId?: string | null; /** last mid-cycle plan adjustment (promise: plan adjusted every 2 weeks) */ adjustedAt?: string | null }
-export interface Drill { id: string; title: string; reps: number; minutes: number; cues: string[]; tags: string[]; createdBy: string; archived: boolean; /** Coach’s reusable feedback starter for this drill. */ fbTemplate?: { wentWell: string; adjust: string; why: string } | null }
+/** v7 pressure rep: game-like constraints that bridge practice and games. */
+export interface Pressure { kind: 'counted' | 'timed' | 'defender' | 'fatigue'; target: string }
+export const PRESSURE_LABEL: Record<Pressure['kind'], string> = { counted: 'Counted (make it to move on)', timed: 'On the clock', defender: 'With a defender (or a chair + closeout)', fatigue: 'Tired legs (after sprints)' };
+export interface Drill { /** v7 */ pressure?: Pressure | null; id: string; title: string; reps: number; minutes: number; cues: string[]; tags: string[]; createdBy: string; archived: boolean; /** Coach’s reusable feedback starter for this drill. */ fbTemplate?: { wentWell: string; adjust: string; why: string } | null }
 export interface Template { id: string; name: string; focus: string; drillIds: string[]; createdBy: string }
 export interface Assignment {
-  id: string; cycleId: string; playerId: string; drillId?: string | null; order: number; title: string; reps: number; minutes: number; cues: string[];
+  id: string; cycleId: string; playerId: string; drillId?: string | null; order: number; title: string; reps: number; minutes: number; cues: string[]; /** v7 */ pressure?: Pressure | null;
   status: 'queued' | 'open' | 'submitted' | 'approved' | 'retry' | 'logged';
 }
-export interface Submission { id: string; assignmentId: string; playerId: string; repsDone: number; reflection: string; linkUrl?: string | null; /** v5 short clip (≤30 s) */ clipId?: string | null; at: string; dueBy: string; /** false = over this week's review allowance: logged, no review owed */ reviewed: boolean }
+export interface Submission { id: string; assignmentId: string; playerId: string; repsDone: number; reflection: string; linkUrl?: string | null; /** v5 short clip (≤30 s) */ clipId?: string | null; at: string; dueBy: string; /** false = over this week's review allowance: logged, no review owed */ reviewed: boolean; /** v7 5-spot shooting log: [made, attempts] for left corner, left wing, top, right wing, right corner */ shots?: number[][] | null }
 /** One feedback format everywhere: what went well, one adjustment, why, the next rep (+ optional link). `feedback` is the composed plain text. */
 export interface Review { id: string; submissionId: string; playerId: string; decision: 'approve' | 'retry'; wentWell: string; adjust: string; why: string; nextRep: string; linkUrl?: string | null; feedback: string; reaction?: 'got_it' | 'question' | null; reactedAt?: string | null; /** v5: tap-to-timestamp notes on the clip */ notes?: TimedNote[] | null; /** coach time on this review */ secondsSpent?: number | null; /** gentle 48 h acknowledgment nudge sent */ nudgedAt?: string | null; at: string; reviewerId: string; status: 'final' | 'pending_signoff'; signedOffBy?: string | null; signedOffAt?: string | null }
 export interface TimedNote { t: number; text: string }
@@ -64,7 +69,7 @@ export interface Habit { id: string; playerId: string; date: string; key: string
 export interface Milestone { id: string; playerId: string; key: string; at: string }
 export interface Digest { id: string; playerId: string; week: string; text: string; status: 'draft' | 'approved'; approvedAt?: string | null; approvedBy?: string | null }
 export interface Meeting { id: string; playerId?: string | null; staffId: string; at: string; minutes: number; kind: 'check-in' | 'live' | 'fit-call' | 'goal-review'; note: string; status: 'scheduled' | 'done' | 'cancelled' }
-export type NotificationType = 'promise_risk' | 'rhythm' | 'question' | 'reply_due_soon' | 'overdue' | 'new_submission' | 'feedback_ready' | 'invite_accepted' | 'plan_published' | 'cycle_review' | 'signoff_needed' | 'new_application' | 'invite_expired' | 'new_message' | 'digest_ready' | 'billing';
+export type NotificationType = 'promise_risk' | 'rhythm' | 'question' | 'reply_due_soon' | 'overdue' | 'new_submission' | 'feedback_ready' | 'invite_accepted' | 'plan_published' | 'cycle_review' | 'signoff_needed' | 'new_application' | 'invite_expired' | 'new_message' | 'digest_ready' | 'billing' | 'game' | 'confidence' | 'gameday';
 export interface Notification { id: string; userId: string; type: NotificationType; text: string; playerId?: string | null; link: string; at: string; readAt?: string | null; emailedAt?: string | null; dedupe: string }
 /** Outbox row: text + HTML, category for preferences, retry bookkeeping. dead = gave up after 5 attempts (dead-letter list). */
 export interface OutboxEmail { id: string; to: string; subject: string; body: string; at: string; status: 'queued' | 'sent' | 'logged' | 'failed' | 'dead'; kind: string; html?: string | null; category?: EmailCategory | null; userId?: string | null; attempts?: number | null; sendAfter?: string | null; lastError?: string | null }
@@ -74,6 +79,16 @@ export interface Subscription { id: string; playerId: string; familyId: string; 
 /** Processed webhook event ids (idempotency). */
 export interface BillingEvent { id: string; kind: string; at: string; playerId?: string | null }
 export type BillingEventKind = 'checkout_completed' | 'subscription_updated' | 'subscription_deleted' | 'invoice_paid' | 'invoice_failed';
+/** v7 game log + post-game check-in. Stats are optional; the check-in (1–5) and one line are the point. */
+export type FocusTried = 'yes' | 'sometimes' | 'not_yet';
+export interface GameStats { min?: number | null; pts?: number | null; fgm?: number | null; fga?: number | null; tpm?: number | null; tpa?: number | null; ftm?: number | null; fta?: number | null; reb?: number | null; ast?: number | null; stl?: number | null; tov?: number | null }
+export interface GameReply { wentWell: string; adjust: string; why: string; feedback: string; by: string; at: string }
+export interface Game { id: string; playerId: string; date: string; at: string; opponent?: string | null; stats: GameStats; confidence: number; focus: number; energy: number; wellDone: string; replay: string; focusTried?: FocusTried | null; cycleId?: string | null; focusText?: string | null; wantsReply: boolean; dueBy?: string | null; seenAt?: string | null; seenBy?: string | null; reply?: GameReply | null }
+/** v7 Wins wall: coach-tagged moments, personal bests, focus confirmed in a game, streaks, rubric gains. key dedupes automatic wins. */
+export interface Win { id: string; playerId: string; at: string; kind: 'coach' | 'best' | 'focus' | 'streak' | 'growth'; text: string; refId?: string | null; by?: string | null; key: string }
+/** v7 timeline notes: one-line coach annotations, the coach-approved "what changed and why" story (per cycle), and dismissed transfer cues. */
+export interface TimelineNote { id: string; playerId: string; kind: 'annotation' | 'story' | 'cue'; refId?: string | null; date: string; text: string; status: 'draft' | 'approved'; by: string; at: string; drafted?: boolean }
+export interface CardSettings { enabled: boolean; token?: string | null; showStats: boolean; momentId?: string | null; updatedAt?: string | null }
 export interface DataRequest { id: string; playerId: string; familyId: string; kind: 'export' | 'delete'; requestedBy: string; at: string; status: 'open' | 'done'; doneAt?: string | null }
 export interface Reflection { id: string; playerId: string; week: string; text: string; feel: number; at: string }
 export interface CycleReview { id: string; cycleId: string; playerId: string; improved?: string | null; hardest?: string | null; wantNext?: string | null; playerAt?: string | null; summary?: string | null; ratingsBefore?: Record<string, number> | null; ratingsAfter?: Record<string, number> | null; nextFocus?: string | null; coachAt?: string | null }
@@ -84,9 +99,9 @@ export interface Snapshot {
   users: User[]; families: Family[]; players: Player[]; applications: Application[]; invites: Invite[]; consents: Consent[];
   cycles: Cycle[]; drills: Drill[]; templates: Template[]; assignments: Assignment[]; submissions: Submission[]; reviews: Review[];
   messages: Message[]; habits: Habit[]; milestones: Milestone[]; digests: Digest[]; meetings: Meeting[];
-  notifications: Notification[]; outbox: OutboxEmail[]; dataRequests: DataRequest[]; reflections: Reflection[]; cycleReviews: CycleReview[]; clips: Clip[]; subscriptions: Subscription[]; billingEvents: BillingEvent[]; events: DomainEvent[];
+  notifications: Notification[]; outbox: OutboxEmail[]; dataRequests: DataRequest[]; reflections: Reflection[]; cycleReviews: CycleReview[]; clips: Clip[]; subscriptions: Subscription[]; billingEvents: BillingEvent[]; games: Game[]; wins: Win[]; timelineNotes: TimelineNote[]; events: DomainEvent[];
 }
-export const TABLES = ['users', 'families', 'players', 'applications', 'invites', 'consents', 'cycles', 'drills', 'templates', 'assignments', 'submissions', 'reviews', 'messages', 'habits', 'milestones', 'digests', 'meetings', 'notifications', 'outbox', 'dataRequests', 'reflections', 'cycleReviews', 'clips', 'subscriptions', 'billingEvents', 'events'] as const;
+export const TABLES = ['users', 'families', 'players', 'applications', 'invites', 'consents', 'cycles', 'drills', 'templates', 'assignments', 'submissions', 'reviews', 'messages', 'habits', 'milestones', 'digests', 'meetings', 'notifications', 'outbox', 'dataRequests', 'reflections', 'cycleReviews', 'clips', 'subscriptions', 'billingEvents', 'games', 'wins', 'timelineNotes', 'events'] as const;
 export type TableName = (typeof TABLES)[number];
 
 export const TIER_INFO: Record<Tier, { price: number; reviewsPerWeek: string }> = {
@@ -117,7 +132,7 @@ export type Command =
   | { type: 'publishPlan'; playerId: string; focus: string; drillIds: string[]; templateId?: string; rev?: number }
   | { type: 'adjustPlan'; playerId: string; note: string; addDrillIds?: string[] }
   | { type: 'openPlan'; playerId: string }
-  | { type: 'submitRep'; playerId: string; repsDone: number; reflection: string; linkUrl?: string; clipId?: string; watchFor?: string }
+  | { type: 'submitRep'; playerId: string; repsDone: number; reflection: string; shots?: number[][]; linkUrl?: string; clipId?: string; watchFor?: string }
   /** Server-only (the upload endpoint runs it after checking the bytes); the browser demo runs it with the measured metadata. */
   | { type: 'registerClip'; playerId: string; clipId: string; storageKey: string; mime: string; bytes: number; durationSec: number; watchFor?: string }
   | { type: 'deleteClip'; playerId: string; clipId: string }
@@ -155,6 +170,13 @@ export type Command =
   | { type: 'billingEvent'; eventId: string; kind: BillingEventKind; playerId?: string | null; customerId?: string | null; subscriptionId?: string | null; tier?: Tier | null; status?: string | null; periodEnd?: string | null; cancelAtPeriodEnd?: boolean; paused?: boolean; amount?: number | null }
   | { type: 'joinWaitlist'; playerId: string }
   | { type: 'setEmailPrefs'; prefs: Partial<EmailPrefs>; userId?: string }
+  /** v7 */
+  | { type: 'logGame'; playerId: string; date?: string; opponent?: string; stats?: GameStats; confidence: number; focus: number; energy: number; wellDone: string; replay?: string; focusTried?: FocusTried; wantsReply?: boolean }
+  | { type: 'reviewGame'; playerId: string; gameId: string; wentWell?: string; adjust?: string; why?: string }
+  | { type: 'addNote'; playerId: string; kind: TimelineNote['kind']; text: string; refId?: string; date?: string; approve?: boolean; drafted?: boolean }
+  | { type: 'tagWin'; playerId: string; text: string; refId?: string }
+  | { type: 'setAffirmation'; playerId: string; text: string }
+  | { type: 'setCard'; playerId: string; enabled?: boolean; showStats?: boolean; momentId?: string | null; newLink?: boolean }
   | { type: 'sweep' }
   | { type: 'generateDigests' }
   | { type: 'advanceClock'; hours: number };

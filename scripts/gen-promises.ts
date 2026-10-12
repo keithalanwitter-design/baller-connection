@@ -48,5 +48,16 @@ ${rows.join('\n')}
 | Ops queue “Billing is tracked manually until Stripe is connected.” | “Payment runs through Stripe checkout …” | Stripe is the source of truth |
 | Sign in: email + password only | “Email me a sign-in link” (15 min, single use), password still works, under-13 PIN unchanged | Magic links |
 | Privacy page | Adds Stripe (payments; we never see card numbers) and Resend/Postmark (email delivery), email preferences and one-click unsubscribe | Processors must be named |
+
+## Copy changed in v7 (games, transfer, confidence, Player Card)
+| Was | Now | Why |
+|---|---|---|
+| Hero: “Personal coaching between practices …” | “See the player you’re becoming, with a real coach watching.” | The angle vs self-tracking apps: a person reads the logs |
+| (none) | \`game-reply\`: games are seen; one game a week can get a written reply in the usual window | Game logs reach a human, not a dashboard |
+| (none) | \`confidence-check\`: two dips in a row → the coach checks in (coach-only flag) | Confidence matters; no grades shown to kids |
+| (none) | \`card-private\`: no card link until a parent turns it on; first name only under 13; stats hidden unless the parent opts in | Sharing is the parent's call |
+| Weekly parent summary | Adds games, average confidence and “tried the focus in N of M games” | Practice-to-game transfer is the gap we coach |
+| (none) | “What changed and why” is written or approved by the coach; the data draft is never shown to families | No AI-coach claims |
+| Comparison | “Self-tracking apps show you numbers. Here a real coach reads them and tells you the one thing to change.” | Honest, no competitor named |
 `);
 console.log(`PROMISES.md: ${PROMISES.length} promises`);

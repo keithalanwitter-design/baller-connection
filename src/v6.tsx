@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { InstallPrompt, PushSettings } from './pwa';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Logo } from './App';
 import { useSnap, useStore } from './store';
@@ -131,6 +132,8 @@ export function AccountPage() {
       <div className="row gap"><label htmlFor="qs">From</label><select id="qs" className="input" value={f.quietStart} onChange={(e) => setF({ ...f, quietStart: Number(e.target.value) })}>{hours.map((h) => <option key={h} value={h}>{hl(h)}</option>)}</select><label htmlFor="qe">to</label><select id="qe" className="input" value={f.quietEnd} onChange={(e) => setF({ ...f, quietEnd: Number(e.target.value) })}>{hours.map((h) => <option key={h} value={h}>{hl(h)}</option>)}</select></div>
       <div className="row gap"><button className="btn">Save email settings</button>{saved && <span className="small" role="status">Saved ✓</span>}</div>
     </form>
+    <PushSettings />
+    <InstallPrompt />
     <section className="panel"><h3 className="display">Sign-in</h3><p className="small dim">Sign in with a password or an emailed link (15 minutes, single use). Players under 13 use the username + PIN a parent sets.</p>
       {mode === 'live' ? <button className="btn outline" onClick={async () => { if (!confirm('Sign out on every device, including this one?')) return; await api.post('/api/auth/logout-all', {}); await refresh(); nav('/login'); }}>Sign out everywhere</button> : <p className="note small">Demo build: no real sessions. On the live server this button ends every session for your account.</p>}
     </section>

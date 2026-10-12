@@ -22,6 +22,8 @@ To change the schema later, add `server/migrations/0006_<name>.sql` and run the 
 
 > v5 adds `0005_v5_clips.sql` (the clips table plus new columns). Run the same migrations command.
 
+> v7 adds `0007_v7_games_timeline.sql` (games, wins, timeline_notes; new columns for affirmation, Player Card settings, pressure reps and shot logs) and `0008_v7_push.sql` (push_subscriptions). Additive only. Run the same command.
+
 > v6 adds `0006_v6_auth_email_billing.sql`: magic-link tokens, email preferences, outbox retry columns, `subscriptions` and `billing_events`. Additive only. **v6 requires payment before onboarding** (Settings → `requirePayment`). Families already onboarded stay as they are; set billing to *comp* for anyone you don't want to charge.
 
 ### Clip storage (R2), needed for v5 uploads
@@ -57,6 +59,23 @@ In `wrangler.toml` `[vars]`:
 4. Every non-essential email carries a one-click unsubscribe (`List-Unsubscribe` + `List-Unsubscribe-Post` headers → `POST /api/unsubscribe`). Sign-in, invite, consent and payment emails are always sent. Quiet hours (default 9 PM–7 AM, program timezone) delay non-urgent mail.
 5. Failures retry at 1 m, 5 m, 30 m, 2 h; after 5 attempts, or a permanent 4xx, mail goes to **Ops → Outbox → Dead letters** with the error and a Retry button.
 
+## 3c · Phone notifications (Web Push / VAPID), optional
+Push stays in **log mode** (decides what it would send, sends nothing) until both keys are set; `/api/health` shows `"push":"log"` or `"push":"vapid"`.
+1. Generate a key pair **on your own machine** (nothing is generated or committed by the repo):
+   ```bash
+   node scripts/vapid-keys.mjs          # or: npx web-push generate-vapid-keys
+   ```
+2. Store them:
+   ```bash
+   npx wrangler secret put VAPID_PRIVATE_KEY      # the private key: secret, never in git
+   ```
+   and in `wrangler.toml` `[vars]` (public values): `VAPID_PUBLIC_KEY = "<public key>"`, `VAPID_SUBJECT = "mailto:you@yourdomain"`.
+   For `npm run serve:local`, put the same three in `.dev.vars` (git-ignored).
+3. Deploy. Families install the app (Add to Home Screen on iPhone, iOS 16.4+), open it from the icon, then turn on **Account → Phone notifications**.
+- Events pushed: feedback ready, nudges, replies, plan drop, game day card. Each follows the user's email category switch (coaching / updates) and quiet hours; pushes inside quiet hours are dropped (the item stays in the app and the email roundup). Payloads are encrypted (aes128gcm) and signed (VAPID, ES256) with WebCrypto, no extra dependency.
+- Only Google, Mozilla, Apple and Microsoft push endpoints are accepted. Endpoints the push service reports as gone (404/410) are deleted. **Sign out everywhere** also removes the user's devices.
+- Rotating keys: generate a new pair and redeploy; existing subscriptions stop working, and users turn notifications on again.
+
 ## 3b · Stripe (test mode first)
 ```bash
 STRIPE_SECRET_KEY=sk_test_… npm run stripe:setup -- --dry-run                       # shows what it will create
@@ -81,6 +100,7 @@ curl https://<APP_URL>/api/health          # {"ok":true,...,"email":"resend","st
 Then sign in as the owner, add an assistant and ops from **Team** (each gets a set-password email), and run one invite end to end.
 
 ## GitHub Pages
+The app is a PWA under the Pages base path: `manifest.webmanifest` (relative `scope`/`start_url`), `sw.js` scoped to `/baller-connection/` (or `/` on the Worker). The service worker caches only the app shell (index, hashed JS/CSS, icons, offline page). It never caches `/api/`, clips, demo videos, or any request with credentials. A new deploy shows an **Update** prompt rather than reloading under the user.
 The Pages workflow publishes the **demo** build (in-browser engine, fictional data) and also runs a `wrangler deploy --dry-run` bundle check. Pages never talks to the production API. A live build hosted elsewhere needs `ALLOW_ORIGIN` set to that origin, but cookies are simplest same-origin on the Worker. `/#/demo` or `?demo=1` forces demo mode on any build.
 
 ## Local verification (what was run)
@@ -88,4 +108,4 @@ The Pages workflow publishes the **demo** build (in-browser engine, fictional da
 - `tests/e2e-multi.mjs` passed against both `wrangler dev` (workerd + local D1) and `npm run serve:local` (Node + SQLite).
 
 ## Not in scope yet
-Full-game film (clips are capped at 30 s), server-side transcoding/trimming (families trim on the phone; the app shows how), and push/SMS notifications.
+Full-game film (clips are capped at 30 s), server-side transcoding/trimming (families trim on the phone; the app shows how), and SMS. Web Push is built in (see 3c) but has not been tried against real push services from this box.

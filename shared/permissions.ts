@@ -24,10 +24,11 @@ export const COMMAND_ROLES: Record<CommandType, Role[]> = {
   completeCycleReview: COACH, adjustPlan: COACH, approveDigests: COACH,
   registerClip: FAMILY, deleteClip: ['parent', 'player', 'head', 'assistant'], setWorkingOn: FAMILY, saveDrillFeedback: COACH,
   billingEvent: ['system'], joinWaitlist: ['parent', 'head', 'ops'], setEmailPrefs: ['head', 'assistant', 'ops', 'parent', 'player', 'system'],
+  logGame: FAMILY, setAffirmation: FAMILY, reviewGame: COACH, addNote: COACH, tagWin: COACH, setCard: ['parent'],
   sweep: ['system'], generateDigests: ['system', 'head'], advanceClock: ['system'],
 };
 /** Commands an assistant may only run on players assigned to them. */
-const ASSIGNED_ONLY: CommandType[] = ['publishPlan', 'review', 'updateCanvas', 'rateSkill', 'approveDigest', 'sendMessage', 'markRead', 'scheduleSession', 'completeCycleReview', 'adjustPlan', 'setTournament', 'deleteClip'];
+const ASSIGNED_ONLY: CommandType[] = ['publishPlan', 'review', 'updateCanvas', 'rateSkill', 'approveDigest', 'sendMessage', 'markRead', 'scheduleSession', 'completeCycleReview', 'adjustPlan', 'setTournament', 'deleteClip', 'reviewGame', 'addNote', 'tagWin'];
 
 export class PermissionError extends Error {}
 const pid = (c: Command): string | undefined => ('playerId' in c ? (c as { playerId?: string }).playerId : undefined);
@@ -49,14 +50,16 @@ export function canSeePlayer(a: Actor, p: Player) {
 
 /** Server-side read filter: each role only receives what it may see. */
 export function scopeSnapshot(s: Snapshot, a: Actor): Snapshot {
-  if (a.role === 'head' || a.role === 'system') return s;
+  if (a.role === 'system') return s;
+  /** v7: the Player Card link token is the parent's to share; nobody else (head coach included) receives it. */
+  if (a.role === 'head') return { ...s, players: s.players.map((p) => (p.card?.token ? { ...p, card: { ...p.card, token: null } } : p)) };
   const players = s.players.filter((p) => canSeePlayer(a, p)); const ids = new Set(players.map((p) => p.id)); const by = <T extends { playerId?: string | null }>(xs: T[]) => xs.filter((x) => x.playerId && ids.has(x.playerId));
   const coaching = a.role === 'assistant'; const family = a.role === 'parent' || a.role === 'player';
   return {
     ...s,
     users: s.users.filter((u) => ['head', 'assistant', 'ops'].includes(u.role) || u.id === a.id || (a.role === 'parent' && u.familyId === a.familyId) || (coaching && u.playerId && ids.has(u.playerId))).map((u) => (family && u.id !== a.id ? { ...u, email: null } : u)),
     families: s.families.filter((f) => players.some((p) => p.familyId === f.id)),
-    players: players.map((p) => (coaching ? p : { ...p, canvas: '' })),
+    players: players.map((p) => { const q = coaching ? p : { ...p, canvas: '' }; return a.role === 'parent' || !q.card ? q : { ...q, card: { ...q.card, token: null } }; }),
     applications: a.role === 'ops' ? s.applications : by(s.applications),
     invites: by(s.invites).map((i) => (a.role === 'ops' ? i : { ...i, tokenHash: '', codeHash: '' })),
     consents: by(s.consents), cycles: by(s.cycles), assignments: by(s.assignments), submissions: by(s.submissions),
@@ -69,6 +72,8 @@ export function scopeSnapshot(s: Snapshot, a: Actor): Snapshot {
     outbox: a.role === 'ops' ? s.outbox : [],
     dataRequests: a.role === 'ops' ? s.dataRequests : by(s.dataRequests),
     subscriptions: a.role === 'ops' ? s.subscriptions ?? [] : family ? by(s.subscriptions ?? []) : [], billingEvents: [],
+    games: a.role === 'ops' ? [] : by(s.games ?? []), wins: a.role === 'ops' ? [] : by(s.wins ?? []),
+    timelineNotes: a.role === 'ops' ? [] : by(s.timelineNotes ?? []).filter((n) => !family || (n.status === 'approved' && n.kind !== 'cue')),
     events: s.events.filter((e) => (a.role === 'ops' ? true : !!e.playerId && ids.has(e.playerId))).map((e) => (family && e.type === 'rubric' ? { ...e, detail: 'Rubric updated' } : e)),
   };
 }

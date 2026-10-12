@@ -21,6 +21,8 @@ export function Logo({ light }: { light?: boolean }) {
 }
 
 const PERSONAS: [UserRole, string, string][] = [['player', 'Player', '/app'], ['parent', 'Parent', '/parent'], ['head', 'Head coach', '/coach'], ['assistant', 'Assistant', '/coach'], ['ops', 'Ops', '/ops']];
+import { PublicCardPage } from './v7';
+import { UpdateToast } from './pwa';
 function DemoBar() {
   const loc = useLocation(); const nav = useNavigate(); const { reset, run, as, setDemoRole } = useStore(); const p = loc.pathname;
   // The route decides the persona; the coach area remembers head vs assistant.
@@ -89,7 +91,7 @@ export default function App() {
   return (
     <>
       <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
-      {mode === 'demo' && <DemoBar />}<ErrorBar />
+      {mode === 'demo' && <DemoBar />}<ErrorBar /><UpdateToast />
       {!s || !ready ? <main id="main" className="loading">{error ? <><p>Couldn’t reach the server. Check your connection, then try again.</p><button className="btn" onClick={() => refresh()}>Try again</button></> : 'Loading…'}</main> : (
         <Routes>
           <Route path="/" element={<Home />} /><Route path="/how" element={<How />} /><Route path="/apply" element={<Apply />} /><Route path="/login" element={<Login />} /><Route path="/forgot" element={<Forgot />} /><Route path="/reset" element={<Reset />} /><Route path="/invite" element={<Invite />} /><Route path="/magic" element={<MagicVerify />} />
@@ -97,7 +99,7 @@ export default function App() {
           <Route path="/welcome" element={<Need roles={['parent']}><Welcome /></Need>} /><Route path="/inbox" element={<Need roles={['parent', 'player']}><FamilyInbox /></Need>} />
           <Route path="/app/*" element={<Need roles={['player', 'parent']}><PlayerShell /></Need>} /><Route path="/parent" element={<Need roles={['parent']}><Parent /></Need>} />
           <Route path="/coach/*" element={<Need roles={['head', 'assistant']}><CoachShell /></Need>} /><Route path="/ops/*" element={<Need roles={['ops', 'head']}><CoachShell ops /></Need>} />
-          <Route path="/log" element={<Need roles={['head', 'ops']}><SystemLog /></Need>} /><Route path="/demo" element={<DemoRedirect />} />
+          <Route path="/log" element={<Need roles={['head', 'ops']}><SystemLog /></Need>} /><Route path="/demo" element={<DemoRedirect />} /><Route path="/card/:token" element={<PublicCardPage />} />
           <Route path="/privacy" element={<Legal page="privacy" />} /><Route path="/terms" element={<Legal page="terms" />} /><Route path="/support" element={<Legal page="support" />} /><Route path="*" element={<Legal page="404" />} />
         </Routes>)}
     </>

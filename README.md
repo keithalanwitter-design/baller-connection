@@ -1,4 +1,4 @@
-# Baller Connection v5
+# Baller Connection v7
 
 **One focus. One next rep. A coach who answers.**
 
@@ -6,6 +6,15 @@ Keith Witter's virtual player-development program, rebuilt as a multi-user produ
 
 - **Live demo (GitHub Pages):** https://keithalanwitter-design.github.io/baller-connection/ This build runs the same engine in your browser on fictional data. The demo bar switches between **Player · Parent · Head coach · Assistant · Ops**.
 - **Real product:** the same app served by a Cloudflare Worker with D1, sessions and cron. See **[DEPLOY.md](DEPLOY.md)**.
+
+## What's new in v7: see the player you're becoming
+- **Game log + check-in** (player or parent, about a minute): opponent, optional stats (made ≤ tried checked), confidence / focus / energy on 1–5 (emoji scale under 13, and fewer stats), one line "did well", one line "would replay", and "did you try the focus?" (yes / sometimes / not yet). The coach gets a light **Game log** queue item with no reply clock. If the player asks for feedback (1 per week, outside the review allowance), it becomes **Game check-in** with the reply window and the standard feedback format.
+- **Progress timeline**: points and confidence per game, reps and streak, focus-start markers, rubric across cycles, clips, coach annotations, and a plain-language **What changed and why**. The coach writes it, or drafts it from the data and must replace the "[coach, add…]" line and approve it before the family sees it. Never labelled AI.
+- **Practice-to-game transfer**: focus-in-game rate (yes = 1, sometimes = ½) on the timeline, the coach's Games tab and cycle reviews. A **Game transfer** queue cue appears under 50% after 2+ games. Adding a **pressure rep** (make-to-advance, timed, consequence, defender) clears it.
+- **Confidence builders**: Wins wall (auto + coach-tagged), pre-game **game plan card** (one focus, one cue, the player's own affirmation), confidence trend, and a gentle **Confidence** coach flag after two drops in a row. Growth words, not grades.
+- **Shooting log**: a 5-spot tap court on shooting reps. Makes/attempts, %, and best spot (3+ attempts) in coach review and on the timeline.
+- **Player Card** (shareable): level, streak, focus, coach quote, best moment. Image export. The private link is parent-controlled and rotatable. Off by default; first name only under 13; stats only when the parent opts in. `GET /api/card/:token` is noindex/no-store.
+- **PWA**: install to home screen (iOS steps included), offline shell, safe update prompt, camera capture for clips in the installed app, opt-in **Web Push** mapped to email preferences + quiet hours (see DEPLOY 3c).
 
 ## What's new in v5
 - **Short clips**: a player or parent can attach one practice clip (≤30 s, ≤50 MB, MP4/MOV/WebM) to a check-in, from a file or the phone camera (`capture`). The browser reads the length from the video metadata and shows a trim hint if it's too long. The server checks it again from the container bytes (MP4/MOV `mvhd`, WebM `Info`) before storing anything. Storage: R2 (`CLIPS` binding) in the Worker, local disk (`CLIPS_DIR`) on Node, and an in-tab blob URL in the demo.

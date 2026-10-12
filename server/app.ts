@@ -1,3 +1,4 @@
+import { publicCard } from '../shared/timeline';
 import type { Command, Snapshot, UserRole } from '../shared/domain';
 import { ConflictError, dispatch, id as newId, WorkflowError } from '../shared/engine';
 import { ENDPOINT_ROLES, PermissionError, SYSTEM, PUBLIC, canSeePlayer, scopeSnapshot, type Actor, type Endpoint } from '../shared/permissions';
@@ -7,6 +8,8 @@ import { COOKIE, hashSecret, hmac, newToken, readToken, sessionCookie, verifySec
 import type { Db } from './db';
 import { makeProvider, ProviderError, type EmailEnv } from './email';
 import { StripeClient, priceId, priceToTier, signStripe, stripeMode, verifyStripe, type StripeEnv } from './stripe';
+import { pushDecision, validPushEndpoint } from '../shared/push';
+import { pushMode, sendPush, type PushEnv } from './push';
 import { CATEGORY, MAX_ATTEMPTS, RETRY_BACKOFF_MS, quietUntil, render, wants, type EmailData, type EmailKind } from '../shared/emails';
 import { checkoutBlock, mockPriceToTier, mockStripeEvents, stripeToCommand, subscriptionOf, TIERS, type MockOutcome } from '../shared/billing';
 import type { EmailCategory, Tier } from '../shared/domain';
@@ -15,7 +18,7 @@ import { playerCsv, calendarIcs } from './export';
 import type { BlobStore } from './blobs';
 import { CLIP_MAX_BYTES, canSeeClip, clipError, normalizeMime, sniffMime, videoDuration } from '../shared/clips';
 
-export interface Env extends EmailEnv, StripeEnv { DB: Db; SESSION_SECRET?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string; /** Clip bytes: R2 (Worker) or local disk (Node). Without it, uploads answer 503. */ BLOBS?: BlobStore }
+export interface Env extends EmailEnv, StripeEnv, PushEnv { DB: Db; SESSION_SECRET?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string; /** Clip bytes: R2 (Worker) or local disk (Node). Without it, uploads answer 503. */ BLOBS?: BlobStore }
 class HttpError extends Error { status: number; constructor(status: number, msg: string) { super(msg); this.status = status; } }
 const SYSTEM_ONLY = new Set(['sweep', 'advanceClock']);
 /** Never accepted from a browser: billing state only changes through a verified Stripe webhook (or the test-mode simulator, which signs its events the same way). */
@@ -41,7 +44,23 @@ export async function runCommand(env: Env, actor: Actor, cmd: Command) {
   await ensureSeeded(env); const repo = new Repo(env.DB); const prev = await repo.load(); const r = dispatch(prev, cmd, actor); await repo.save(r.snapshot, prev);
   // Clips removed by this command (deleted on request, 90-day retention, data deletion): remove the bytes too.
   const kept = new Set((r.snapshot.clips ?? []).map((c) => c.id)); for (const c of prev.clips ?? []) if (!kept.has(c.id) && env.BLOBS && !c.storageKey.startsWith('demo/')) await env.BLOBS.delete(c.storageKey).catch(() => undefined);
-  await deliver(env); return r;
+  await deliver(env); await pushNew(env, prev.notifications, r.snapshot).catch((e) => console.error('push failed', e)); return r;
+}
+/** v7: new in-app notifications that map to a push event go to that user's subscribed devices, respecting email-category prefs + quiet hours. */
+export const pushLog: { userId: string; title: string; body: string; at: string; status: string }[] = [];
+export async function pushNew(env: Env, before: Snapshot['notifications'], after: Snapshot, f: typeof fetch = fetch, now = new Date()) {
+  const seen = new Set(before.map((n) => n.id)); const fresh = after.notifications.filter((n) => !seen.has(n.id)); if (!fresh.length) return 0;
+  const repo = new Repo(env.DB); let sent = 0;
+  for (const n of fresh) {
+    const u = after.users.find((x) => x.id === n.userId); const p = pushDecision(n, u?.prefs, now, after.settings.timezone); if (!p) continue;
+    const subs = (await repo.pushSubsFor(n.userId)).results; if (!subs.length) continue;
+    for (const sub of subs) {
+      const r = await sendPush(env, sub, p, f); sent++;
+      if (pushMode(env) === 'log') { pushLog.unshift({ userId: n.userId, title: p.title, body: p.body, at: now.toISOString(), status: 'logged' }); pushLog.length = Math.min(pushLog.length, 50); }
+      if (r.status === 'gone') await repo.deletePushSub(sub.endpoint); else await repo.markPush(sub.endpoint, r.status === 'failed' ? `HTTP ${r.code}` : null);
+    }
+  }
+  return sent;
 }
 /** Once a real provider has the mail, the outbox copy no longer needs the invite/reset secret. (The Log provider keeps it: it IS the delivery in dev.) */
 export const redactSecrets = (b: string) => b.replace(/token=[A-Za-z0-9_-]+/g, 'token=[sent]').replace(/code \d{6}/g, 'code [sent]');
@@ -102,7 +121,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   const need = async (ep: Endpoint) => { const a = await me(); if (!a) throw new HttpError(401, 'Sign in required'); if (!ENDPOINT_ROLES[ep].includes(a.role)) throw new HttpError(403, `${a.role} can’t access ${ep}`); return a; };
   try {
     await ensureSeeded(env);
-    if (path === '/api/health') return json({ ok: true, version: await repo.version(), demo: env.DEMO === '1', email: makeProvider(env).name, stripe: stripeMode(env) });
+    if (path === '/api/health') return json({ ok: true, version: await repo.version(), demo: env.DEMO === '1', email: makeProvider(env).name, stripe: stripeMode(env), push: pushMode(env) });
     if (path === '/api/workflow') return json({ transitions: TRANSITIONS });
     // ---------- auth ----------
     if (path === '/api/auth/login' && req.method === 'POST') {
@@ -113,7 +132,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
       return json({ user: { id: u.id, name: u.name, role: u.role } }, 200, await startSession(u.id as string));
     }
     if (path === '/api/auth/logout' && req.method === 'POST') { const t = readToken(req); if (t) await repo.deleteSession(await hmac(secret, t)); return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }); }
-    if (path === '/api/auth/logout-all' && req.method === 'POST') { const a = await me(); if (a) await repo.endAllSessions(a.id); return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }); }
+    if (path === '/api/auth/logout-all' && req.method === 'POST') { const a = await me(); if (a) { await repo.endAllSessions(a.id); await repo.deleteUserPushSubs(a.id); } return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }); }
     // ---------- v6 magic links: hashed, 15 min, single use; same answer whether or not the account exists ----------
     if (path === '/api/auth/magic' && req.method === 'POST') {
       const b = await body<{ email?: string }>(); const email = (b.email ?? '').trim().toLowerCase(); const pair = `magic:${email}|${ip}`; const ipKey = `magic-ip:${ip}`;
@@ -172,6 +191,9 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     // ---------- public intake ----------
     if (path === '/api/apply' && req.method === 'POST') { const b = await body<Command>(); if (b.type !== 'submitApplication') throw new HttpError(400, 'Bad request'); const r = await runCommand(env, (await me()) ?? PUBLIC, b); return json({ ok: true, playerId: r.created?.playerId }); }
     // ---------- app ----------
+    // v7: a Player Card shared by its private link. No sign-in; only works while the parent has the link on; shows the public card fields only.
+    const card = path.match(/^\/api\/card\/([a-f0-9]{16,64})$/);
+    if (card && req.method === 'GET') { const s = await repo.load(); const p = s.players.find((x) => x.card?.enabled && x.card.token && x.card.token === card[1]); if (!p) throw new HttpError(404, 'This card link is off or was replaced.'); return json(publicCard(s, p), 200, { 'cache-control': 'no-store', 'x-robots-tag': 'noindex' }); }
     if (path === '/api/snapshot') { const a = await need('snapshot'); return json({ me: a, snapshot: scopeSnapshot(await repo.load(), a) }); }
     if (path === '/api/commands' && req.method === 'POST') {
       const a = await need('commands'); const cmd = await body<Command>();
@@ -211,6 +233,17 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     if (path === '/api/queue') { const a = await need('snapshot'); const s = scopeSnapshot(await repo.load(), a); return json({ coach: buildQueue(s, a.role === 'assistant' ? a.id : undefined), ops: a.role === 'ops' || a.role === 'head' ? buildOpsQueue(s) : [] }); }
     if (path === '/api/team') { await need('team'); return json(teamLoad(await repo.load())); }
     if (path === '/api/audit') { await need('audit'); const s = await repo.load(); return json(s.events.slice(-Number(url.searchParams.get('limit') ?? 200)).reverse()); }
+    // ---------- v7 Web Push (opt-in per device) ----------
+    if (path === '/api/push/key') return json({ mode: pushMode(env), publicKey: env.VAPID_PUBLIC_KEY ?? null });
+    if (path === '/api/push/status') { const a = await me(); if (!a) throw new HttpError(401, 'Sign in required'); return json({ mode: pushMode(env), devices: await repo.countPushSubs(a.id) }); }
+    if (path === '/api/push/subscribe' && req.method === 'POST') {
+      const a = await me(); if (!a) throw new HttpError(401, 'Sign in required'); const b = await body<{ endpoint?: string; keys?: { p256dh?: string; auth?: string } }>();
+      const ep = String(b.endpoint ?? ''), pk = String(b.keys?.p256dh ?? ''), au = String(b.keys?.auth ?? '');
+      if (!validPushEndpoint(ep) || ep.length > 1000) throw new HttpError(400, 'That push endpoint isn’t from a known browser push service.');
+      if (!/^[A-Za-z0-9_-]{80,100}$/.test(pk) || !/^[A-Za-z0-9_-]{16,32}$/.test(au)) throw new HttpError(400, 'Push keys look wrong.');
+      await repo.savePushSub(a.id, { endpoint: ep, p256dh: pk, auth: au }); return json({ ok: true, mode: pushMode(env) });
+    }
+    if (path === '/api/push/unsubscribe' && req.method === 'POST') { const a = await me(); if (!a) throw new HttpError(401, 'Sign in required'); const b = await body<{ endpoint?: string }>(); await repo.deletePushSub(String(b.endpoint ?? ''), a.id); return json({ ok: true }); }
     if (path === '/api/outbox') { await need('outbox'); return json((await repo.outbox(200, url.searchParams.get('status') ?? undefined)).results); }
     if (path === '/api/outbox/retry' && req.method === 'POST') { await need('outbox'); const b = await body<{ id: string }>(); await repo.requeueEmail(b.id); await deliver(env); return json({ ok: true }); }
     // ---------- v6 billing (Stripe test mode, or the built-in simulator when no key is set) ----------
@@ -269,7 +302,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   }
 }
 async function wipe(db: Db) {
-  const tables = ['events', 'billing_events', 'subscriptions', 'magic_tokens', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
+  const tables = ['events', 'timeline_notes', 'wins', 'games', 'billing_events', 'subscriptions', 'push_subscriptions', 'magic_tokens', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
   await db.batch([db.prepare('PRAGMA defer_foreign_keys = ON'), ...tables.map((t) => db.prepare(`DELETE FROM ${t}`))]);
 }
 export type { Snapshot };

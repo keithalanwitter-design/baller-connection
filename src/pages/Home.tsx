@@ -4,7 +4,7 @@ import { Footer, SiteHeader } from '../App';
 import { TIERS } from '../../shared/domain';
 
 const PLANS = [
-  { name: 'Foundation' as const, tag: 'Build the habit', items: ['Personal plan with one focus', 'A weekly set of assigned reps', '1 written coach review per week', 'Send a short practice clip (30 s) with a check-in', 'Daily habits, streaks and journey levels', 'Weekly parent summary'] },
+  { name: 'Foundation' as const, tag: 'Build the habit', items: ['Personal plan with one focus', 'A weekly set of assigned reps', '1 written coach review per week', 'Send a short practice clip (30 s) with a check-in', 'Game log + post-game check-in your coach reads', 'Progress timeline, Wins wall and Player Card', 'Daily habits, streaks and journey levels', 'Weekly parent summary'] },
   { name: 'Development' as const, tag: 'Most families', featured: true, items: ['Everything in Foundation', 'Up to 3 written reviews per week', 'Plan adjusted every 2 weeks', 'One 20-minute video check-in per month', 'Skill rubric updated every cycle'] },
   { name: 'Inner Circle' as const, tag: '4 spots total', items: ['Everything in Development', 'Weekly 30-minute live video session', 'Review on every submission', 'Pre-tournament game plan', 'Season goal review with parents'] },
 ];
@@ -13,11 +13,33 @@ const FAQ = [
   ['What ages?', 'Players 10–16 who can practice on their own 2+ days a week. Younger players are welcome if a parent helps them log.'],
   ['Why only 15 players?', 'Your coach reviews your check-ins personally, and the head coach checks any review an assistant writes. Past 15, replies slow down and plans stop being personal, so we cap it and keep a waitlist. The app enforces the cap. When a spot opens, the longest-waiting family gets an email with a link held for 48 hours.'],
   ['What happens if the coach is late?', 'Every submission has a reply-by time based on your plan. If it passes, it jumps to the top of the coach’s queue marked overdue, and you can see the deadline on your Today screen.'],
+  ['Is there an app?', 'Yes, as a web app you add to your home screen (iPhone: Share → Add to Home Screen). It opens full screen, records clips with the camera, and can send phone notifications when your coach replies, if you turn them on. Nothing to download from an app store.'],
+  ['Do you track games?', 'Players log their own games in about a minute: optional stats, confidence, focus and energy (1–5), one thing they did well, and whether they tried their focus. The coach reads every log, and players can ask for feedback on one game a week, answered in writing within your usual reply window. Under-13s get an emoji scale and fewer stats.'],
   ['Do you review game film?', 'Not full game film. With a check-in, players can send one short practice clip (up to 30 seconds), and the coach answers with written feedback and time-stamped notes. Clips count toward your plan’s weekly reviews. Full film breakdown isn’t offered.'],
   ['Contracts?', 'None. Month to month, billed in advance through Stripe. Pause coaching anytime from the parent view and pick up exactly where you left off (pausing doesn’t stop billing).'],
   ['How do I cancel?', 'Parent view → Billing → Manage billing (Stripe’s secure portal). Coaching continues to the end of the month you paid for. No fees, no partial-month refunds.'],
   ['What if a payment fails?', 'Stripe retries and we email you. Coaching keeps going for 7 days while you update the card; after that it pauses, with progress saved, until the payment goes through.'],
 ];
+const JOURNEY = [
+  { k: 'Play', t: 'Practice the one focus. Then play the game.', d: 'Log practice reps and games in a minute: a few stats if you want, how you felt, one thing you did well.' },
+  { k: 'Reflect', t: 'One honest line, every time.', d: 'Confidence, focus and energy 1–5, plus “did I try my focus in the game?” Yes, sometimes or not yet are all good answers.' },
+  { k: 'Coach', t: 'A real person reads it.', d: 'Your coach replies with what went well, one adjustment and why, and notices when practice isn’t showing up in games yet.' },
+  { k: 'Improve', t: 'See it change.', d: 'A timeline of games, confidence and focus changes, with the coach’s own notes on what changed and why.' },
+];
+const DEMO_TL = [{ x: 20, p: 4, c: 2 }, { x: 95, p: 6, c: 3 }, { x: 150, p: 7, c: 3 }, { x: 205, p: 9, c: 4 }];
+function PhoneTimeline() {
+  const Y = (v: number, max: number) => 150 - (v / max) * 110;
+  return <div className="phone" aria-label="Example progress timeline for a fictional player, Avery Pine"><div className="phone-notch" aria-hidden />
+    <div className="phone-screen"><p className="kicker orange">Avery’s timeline</p><p className="ph-title">See the player you’re becoming</p>
+      <svg viewBox="0 0 230 170" className="ph-chart" aria-hidden><line x1="70" x2="70" y1="10" y2="150" className="ph-focus" /><text x="74" y="20" className="ph-lab">Focus: weak hand</text>
+        <polyline points={DEMO_TL.map((g) => `${g.x},${Y(g.p, 10)}`).join(' ')} className="ph-pts" /><polyline points={DEMO_TL.map((g) => `${g.x},${Y(g.c, 5)}`).join(' ')} className="ph-conf" />
+        {DEMO_TL.map((g) => <circle key={g.x} cx={g.x} cy={Y(g.c, 5)} r="5" className="ph-dot" />)}<circle cx="205" cy="25" r="9" className="ph-note" /><text x="205" y="29" textAnchor="middle" className="ph-n">1</text></svg>
+      <p className="ph-legend"><span className="o">— points</span> <span className="b">— confidence</span></p>
+      <div className="ph-note-card"><b>📌 Coach:</b> First game the left hand showed up under pressure.</div>
+      <div className="ph-transfer"><span>Practice → game</span><i><b style={{ width: '50%' }} /></i><span>50%</span></div>
+      <div className="ph-win">🏅 Personal best: 9 points</div></div></div>;
+}
+
 const LOOP = [
   { k: 'Focus', t: 'Weak-hand control under pressure', who: 'Coach sets it', x: 70, y: 210 },
   { k: 'Rep', t: 'Finishing ladder · 5 sets · 15 min', who: 'Avery logs it', x: 170, y: 90 },
@@ -58,12 +80,26 @@ export default function Home() {
         <section className="hero"><div className="wrap hgrid">
           <div>
             <p className="kicker orange">Virtual player development · 15 players max</p>
-            <h1 className="display xl">One focus.<br />One next rep.<br /><span className="hl">A coach who answers.</span></h1>
-            <p className="lead">Each player gets a personal plan, one rep to do next, and a written reply from their coach on every reviewed check-in (1 a week, up to 3, or every one, by plan), with a reply-by time you can see. Parents get a one-minute weekly summary.</p>
+            <h1 className="display xl">See the player you’re becoming,<br /><span className="hl">with a real coach watching.</span></h1>
+            <p className="lead">One focus, one next rep, and a coach who reads your practice and your games. Every reviewed check-in gets a written reply (1 a week, up to 3, or every one, by plan) with a reply-by time you can see. Parents get a one-minute weekly summary.</p>
             <div className="row gap"><Link className="btn lg" to="/apply">Apply in 2 minutes</Link><Link className="btn outline lg" to="/app">Try the player demo</Link></div>
             <p className="small dim">From $69/month · No contracts · Every reply has a deadline</p>
           </div>
           <HeroLoop />
+        </div></section>
+
+        <section className="journey" id="journey"><div className="wrap">
+          <p className="kicker orange">The journey</p><h2 className="display">Play. Reflect. Coach. Improve.</h2>
+          <ol className="jband">{JOURNEY.map((j, i) => <li key={j.k}><span className="jn">{i + 1}</span><h3 className="display">{j.k}</h3><p className="strong">{j.t}</p><p className="small">{j.d}</p></li>)}</ol>
+          <p className="compare">Self-tracking apps show you numbers. Here, a real coach reads them and tells you the one thing to change, and checks whether it shows up in your games.</p>
+        </div></section>
+
+        <section className="paper tlband"><div className="wrap tlgrid">
+          <div><p className="kicker">Progress you can see</p><h2 className="display">Practice builds it. Games show it.</h2>
+            <p>The gap most players have isn’t effort. It’s that what they practice doesn’t show up in games yet. After each game, players answer one question: did I try my focus? The timeline shows points and confidence game by game, when each new focus started, and how often the focus made it into a game.</p>
+            <ul className="ticks"><li>Pressure reps (counted, on the clock, with a defender, on tired legs) make practice look like the game</li><li>A pre-game card: one focus, one cue, one line in the player’s own words</li><li>A Wins wall to revisit before a big game, and a gentle coach check-in if confidence dips two games in a row</li><li>A Player Card parents can share by private link (off until they turn it on)</li></ul>
+            <p className="small dim">Players log their own games; we don’t break down game film. Confidence is the player’s own 1–5 read, never a grade.</p></div>
+          <PhoneTimeline />
         </div></section>
 
         <section className="scoreboard"><div className="wrap">
@@ -99,6 +135,12 @@ export default function Home() {
               <ul>{t.items.map((x) => <li key={x}>{x}</li>)}</ul>
               <Link className={`btn ${t.featured ? '' : 'ghost'}`} to={`/apply?tier=${t.name}`}>Apply for {t.name}</Link>
             </article>))}</div>
+        </div></section>
+
+        <section className="founder" id="why"><div className="wrap narrow">
+          <p className="kicker orange">Why this exists</p><h2 className="display">A note from the founder</h2>
+          <p className="note">Placeholder for Keith’s story. Replace this block with your own words before launch: why you started Baller Connection, the player (maybe you) who practiced hard but froze in games, and why you cap the roster at 15.</p>
+          <blockquote className="quote">“[Your story, 3–4 sentences. Keep it true and specific.]”<footer>— [Your name], founder</footer></blockquote>
         </div></section>
 
         <section className="coachband" id="coach"><div className="wrap cgrid">

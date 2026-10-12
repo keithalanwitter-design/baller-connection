@@ -6,6 +6,7 @@ import { clock, family, first, playerCycle, progress } from '../../shared/workfl
 import { Moments, PathPanel, PlayerPicker, Track, UserMenu, useFamilyPlayer } from '../ui';
 import { ClipPrivacy, FocusCard } from '../v5';
 import { BillingPanel } from '../v6';
+import { CardSettings, GamesList, Timeline, WinsWall } from '../v7';
 import { subscriptionOf } from '../../shared/billing';
 import { CoachKnows, CycleReviewPlayer, PromiseCard, UnifiedInbox } from '../v4';
 import { plainFeedback } from '../../shared/personal';
@@ -59,6 +60,9 @@ export default function Parent() {
         <FocusCard p={p} me="parent" compact />
         <div className="stats"><div><b>{assigned.length}</b><span>reps this cycle</span></div><div><b>{subs.length}</b><span>done this week</span></div><div><b>{pr.streak}</b><span>day streak</span></div><div><b>L{pr.level}</b><span>{pr.name}</span></div></div>
         <section className="panel"><h3 className="display">Coach’s weekly note</h3>{digest ? <blockquote className="quote sm">{digest.text}</blockquote> : <p className="dim">The coach approves this week’s summary on Sunday.</p>}</section>
+        <Timeline p={p} me="parent" />
+        <section className="panel" id="games"><h3 className="display">Games</h3><p className="small dim">{first(p.name)} logs games after they happen; the coach reads every one. Confidence is {first(p.name)}’s own read, shown to help, never graded.</p><GamesList p={p} me="parent" /></section>
+        <WinsWall p={p} me="parent" />
         <section className="panel"><h3 className="display">This cycle{cyc ? `: ${cyc.focus}` : ''}</h3>{assigned.length === 0 ? <p className="dim">No work assigned yet.</p> :
           <ul className="plain">{assigned.map((a) => { const r = s.reviews.find((x) => x.status === 'final' && s.submissions.find((y) => y.id === x.submissionId)?.assignmentId === a.id); return <li key={a.id}><strong>{a.title}</strong> — {({ queued: 'up later', open: 'to do now', submitted: 'done, awaiting coach', approved: 'approved ✓', retry: 'coach asked for another attempt', logged: 'done (logged)' })[a.status]}{r && <p className="small dim">{r.wentWell ? plainFeedback(p, r) : `Coach: ${r.feedback}`}</p>}</li>; })}</ul>}</section>
         <PromiseCard p={p} />
@@ -66,6 +70,7 @@ export default function Parent() {
         <CycleReviewPlayer p={p} me="parent" />
         <CoachKnows p={p} />
         <ClipPrivacy p={p} />
+        <CardSettings p={p} />
         <BillingPanel p={p} />
         <Account p={p} />
         <p className="small dim">No coaching homework for you. {canPause && <button className="link small" onClick={() => run({ type: 'pause', playerId: p.id })}>Pause coaching</button>}{p.state === 'Paused' && !subscriptionOf(s, p.id)?.pausedByBilling && <button className="link small" onClick={() => run({ type: 'resume', playerId: p.id })}>Resume coaching</button>} Pausing coaching doesn’t stop billing; to stop paying, cancel in Billing.</p>

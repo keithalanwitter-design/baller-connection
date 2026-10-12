@@ -8,22 +8,25 @@ import { clock, first, guide, tierReply, userName, lastReview, lastSubmission, o
 import { greeting, rhythmToday } from '../../shared/personal';
 import { ActionButton, JourneyMap, Moments, PathPanel, PlayerPicker, Rubric, UserMenu, useFamilyPlayer } from '../ui';
 import { ClipPicker, FocusCard, RETENTION_COPY, WorkingOn, needsAck, type PickedClip } from '../v5';
+import { InstallPrompt } from '../pwa';
+import { CardSettings, GameLogForm, GamePlanCard, GamesList, PressureBadge, ShotCourt, Timeline, TransferBadge, WinsWall, emptyShots, isShooting } from '../v7';
 import { CoachKnows, CycleReviewPlayer, FeedbackTimeline, PromiseCard, ReflectionCard, TournamentBox, UnifiedInbox, WhyLine } from '../v4';
 
 function CheckIn({ p }: { p: Player }) {
   const s = useSnap(); const { run, upload } = useStore(); const a = openAssignment(s, p.id)!;
   const [reps, setReps] = useState<boolean[]>(() => Array(a.reps).fill(false)); const [r, setR] = useState(''); const [link, setLink] = useState(''); const [busy, setBusy] = useState(false);
-  const [clip, setClip] = useState<PickedClip | null>(null); const [watch, setWatch] = useState(''); const [stage, setStage] = useState('');
+  const [shots, setShots] = useState<number[][]>(emptyShots); const [clip, setClip] = useState<PickedClip | null>(null); const [watch, setWatch] = useState(''); const [stage, setStage] = useState('');
   const done = reps.filter(Boolean).length;
   return (
     <form className="checkin" onSubmit={async (e) => { e.preventDefault(); setBusy(true);
       let clipId: string | undefined; if (clip) { setStage('Uploading clip…'); clipId = (await upload(p.id, clip.file, { durationSec: clip.durationSec, mime: clip.mime, watchFor: watch })) ?? undefined; if (!clipId) { setBusy(false); setStage(''); return; } }
-      setStage('Sending…'); await run({ type: 'submitRep', playerId: p.id, repsDone: done, reflection: r, linkUrl: link.trim() || undefined, clipId, watchFor: clip ? watch : undefined }); setBusy(false); setStage(''); }}>
+      setStage('Sending…'); await run({ type: 'submitRep', playerId: p.id, repsDone: done, reflection: r, shots: shots.some((x) => x[1] > 0) ? shots : undefined, linkUrl: link.trim() || undefined, clipId, watchFor: clip ? watch : undefined }); setBusy(false); setStage(''); }}>
       <p className="strong">1 · Tap each set you finished</p>
       <div className="reps">{reps.map((v, i) => <button type="button" key={i} aria-pressed={v} aria-label={`Set ${i + 1}`} className={`rep ${v ? 'on' : ''}`} onClick={() => setReps(reps.map((x, j) => (j === i ? !x : x)))}>{v ? '✓' : i + 1}</button>)}</div>
       <div className="repbar" aria-hidden><i style={{ width: `${(done / a.reps) * 100}%` }} /></div>
       <label htmlFor="refl" className="strong">2 · One honest sentence: what happened?</label>
       <textarea id="refl" className="input" rows={2} maxLength={240} value={r} onChange={(e) => setR(e.target.value)} placeholder="Lost it on the switch twice, better when I stayed low." />
+      <details className="shotlog" open={isShooting(a.title)}><summary className="strong">Optional: shooting log (tap the 5 spots)</summary><ShotCourt value={shots} onChange={setShots} /></details>
       <p className="strong">3 · Optional: a short clip of one rep</p>
       <ClipPicker p={p} value={clip} onChange={setClip} />
       {clip && <><label htmlFor="watch" className="small">What should your coach watch for? (optional)</label><input id="watch" className="input" maxLength={200} value={watch} onChange={(e) => setWatch(e.target.value)} placeholder="My feet on the catch" /></>}
@@ -41,7 +44,7 @@ function RepCard({ p }: { p: Player }) {
   let body;
   if (p.state === 'Work ready' && a) body = <>
     <p className="kicker orange">{retry ? 'Another attempt · with your coach’s adjustment' : 'Your next rep'}</p><h2 className="display">{a.title}</h2>
-    <p className="meta">{a.reps} sets · {a.minutes} min · Focus: {cyc?.focus}</p><WhyLine p={p} />
+    <p className="meta">{a.reps} sets · {a.minutes} min · Focus: {cyc?.focus}</p><PressureBadge pr={a.pressure} /><WhyLine p={p} />
     {rev && (retry || rev.reaction === 'got_it') && <FocusCard p={p} me="player" compact />}
     <ul className="cues">{a.cues.map((c) => <li key={c}>{c}</li>)}</ul>{retry && needsAck(s, p) ? <p className="note">Confirm your coach’s adjustment above, then log this rep.</p> : <CheckIn p={p} />}</>;
   else if ((p.state === 'Submitted' || p.state === 'Feedback due' || p.state === 'Sign-off') && sub) body = <>
@@ -81,6 +84,8 @@ function Today({ p }: { p: Player }) {
     <WorkingOn p={p} editable />
     {!repOwnsAction && <PathPanel p={p} role="player" />}
     <RepCard p={p} />
+    <GamePlanCard p={p} editable compact />
+    <InstallPrompt compact />
     {(day === 5 || day === 6 || day === 0) && <ReflectionCard p={p} />}
     <Habits p={p} />
   </>);
@@ -90,7 +95,7 @@ function Develop({ p }: { p: Player }) {
   const s = useSnap(); const cyc = playerCycle(s, p.id);
   return (<>
     <h1 className="display">Develop</h1>
-    <section className="focuscard"><p className="kicker orange">Current focus{cyc ? ` · Cycle ${cyc.index} · review ${shortWhen(cyc.endAt)}` : ''}</p><h2 className="display">{cyc?.focus || 'Coming with your first plan'}</h2><WhyLine p={p} /></section>
+    <section className="focuscard"><p className="kicker orange">Current focus{cyc ? ` · Cycle ${cyc.index} · review ${shortWhen(cyc.endAt)}` : ''}</p><h2 className="display">{cyc?.focus || 'Coming with your first plan'}</h2><WhyLine p={p} /><TransferBadge p={p} /></section>
     {p.state === 'Cycle review' && <CycleReviewPlayer p={p} me="player" />}
     <section><h3 className="display">Feedback history</h3><p className="small dim">Every rep, what you wrote, and what your coach saw. Tap 👍 or ❓ on any feedback.</p><FeedbackTimeline p={p} me="player" /></section>
     <CoachKnows p={p} editable />
@@ -107,16 +112,29 @@ function Progress({ p }: { p: Player }) {
   return (<>
     <h1 className="display">Progress</h1>
     <div className="stats"><div><b>{pr.streak}</b><span>day streak</span></div><div><b>{pr.subs}</b><span>check-ins</span></div><div><b>{pr.approved}</b><span>approved</span></div><div><b>{pr.cycles}</b><span>cycles</span></div></div>
+    <Timeline p={p} me="player" />
+    <WinsWall p={p} me="player" />
     <JourneyMap pid={p.id} big />
     <PromiseCard p={p} />
+    <CardSettings p={p} />
     <section className="panel"><h3 className="display">Badges</h3><ul className="badges">{ALL.map((n) => { const m = ms.find((x) => x.key === n); return <li key={n} className={m ? 'on' : ''}><span aria-hidden>{m ? '★' : '☆'}</span>{n}<span className="sr">{m ? ' earned' : ' not yet'}</span>{m && <small>{shortWhen(m.at)}</small>}</li>; })}</ul></section>
+  </>);
+}
+
+function Games({ p }: { p: Player }) {
+  const playing = !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(p.state);
+  return (<>
+    <h1 className="display">Games</h1><p className="small light">Practice builds it. Games show it. Log each game in a minute; your coach reads every one.</p>
+    <GamePlanCard p={p} editable />
+    {playing ? <GameLogForm p={p} onDone={() => document.getElementById('games')?.scrollIntoView({ behavior: 'smooth' })} /> : <p className="note">Game logs open once coaching starts.</p>}
+    <section id="games"><h3 className="display">My games</h3><TransferBadge p={p} /><GamesList p={p} me="player" /></section>
   </>);
 }
 
 export function PlayerShell() {
   const s = useSnap(); const [sp] = useSearchParams(); const p = useFamilyPlayer(s, sp.get('p')); const { run, mode, as } = useStore();
   if (!p) return <main className="appmain"><p>No player on this account yet.</p></main>;
-  const tabs = [['/app', 'Today', '◎'], ['/app/develop', 'Develop', '▲'], ['/app/inbox', 'Inbox', '✉'], ['/app/progress', 'Progress', '★']];
+  const tabs = [['/app', 'Today', '◎'], ['/app/games', 'Games', '🏀'], ['/app/develop', 'Develop', '▲'], ['/app/inbox', 'Inbox', '✉'], ['/app/progress', 'Progress', '★']];
   const unread = s.messages.filter((m) => m.playerId === p.id && m.from === 'coach' && !(as && m.readBy?.[as.id])).length + s.notifications.filter((n) => n.userId === as?.id && !n.readAt).length; void run;
   return (
     <div className="appshell hardwood">
@@ -126,7 +144,7 @@ export function PlayerShell() {
           <Route index element={<Today p={p} />} /><Route path="develop" element={<Develop p={p} />} /><Route path="development" element={<Develop p={p} />} />
           <Route path="inbox" element={<><h1 className="display">Inbox</h1><p className="small dim">Messages and updates in one place. Coach replies {tierReply(s, p)}; each message shows when.</p><UnifiedInbox players={[p]} me={as?.role === 'parent' ? 'parent' : 'player'} fixedPlayer /></>} />
           <Route path="messages" element={<Navigate to="/app/inbox" replace />} />
-          <Route path="progress" element={<Progress p={p} />} />
+          <Route path="progress" element={<Progress p={p} />} /><Route path="games" element={<Games p={p} />} />
         </Routes>
       </main>
       <nav className="tabbar" aria-label="Player">{tabs.map(([to, l, ic]) => <NavLink key={to} to={to} end><span aria-hidden>{ic}</span>{l}{l === 'Inbox' && unread > 0 && <i className="dotn" aria-hidden />}</NavLink>)}</nav>

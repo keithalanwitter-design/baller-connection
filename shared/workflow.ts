@@ -1,6 +1,7 @@
 import { replyLabel, type Assignment, type CommandType, type LifecycleState, type Perspective, type Player, type Role, type Snapshot } from './domain';
 import { addBusinessDays, isoDay, now, shortWhen } from './time';
 import { promiseRisks } from './promises';
+import { confidenceDip, FEEL_WORDS, gameLine, transferCue, TRIED_LABEL } from './games';
 
 /** Explicit lifecycle state machine: command → allowed source states → target. */
 export const TRANSITIONS: { cmd: CommandType; from: LifecycleState[]; to: LifecycleState | 'dynamic'; actor: Role; label: string }[] = [
@@ -100,10 +101,10 @@ function guideRaw(s: Snapshot, p: Player, view: Perspective): Omit<Guide, 'actio
 }
 
 // ---------- coach queue (routed to an owner) ----------
-export type QueueKind = 'Reply needed' | 'Sign-off' | 'Work ready' | 'Cycle review' | 'Plan needed' | 'Not confirmed' | 'Promise' | 'Activation' | 'Upcoming';
-export const QUEUE_KINDS: QueueKind[] = ['Reply needed', 'Sign-off', 'Work ready', 'Cycle review', 'Plan needed', 'Not confirmed', 'Promise', 'Activation', 'Upcoming'];
+export type QueueKind = 'Reply needed' | 'Sign-off' | 'Work ready' | 'Cycle review' | 'Plan needed' | 'Not confirmed' | 'Promise' | 'Activation' | 'Upcoming' | 'Game check-in' | 'Confidence' | 'Game transfer' | 'Game log';
+export const QUEUE_KINDS: QueueKind[] = ['Reply needed', 'Sign-off', 'Work ready', 'Game check-in', 'Cycle review', 'Plan needed', 'Not confirmed', 'Confidence', 'Game transfer', 'Promise', 'Activation', 'Game log', 'Upcoming'];
 /** Owed work, never "Upcoming". */
-export const OWED = (k: QueueKind) => k !== 'Upcoming';
+export const OWED = (k: QueueKind) => k !== 'Upcoming' && k !== 'Game log';
 export interface QueueItem { key: string; kind: QueueKind; player: Player; ownerId: string; ownerName: string; what: string; why: string; unlocks: string; dueBy?: string; overdue: boolean; to: string }
 export function buildQueue(s: Snapshot, ownerId?: string): QueueItem[] {
   const t = clock(s).getTime(); const q: QueueItem[] = []; const head = headCoach(s)?.id ?? '';
@@ -118,8 +119,13 @@ export function buildQueue(s: Snapshot, ownerId?: string): QueueItem[] {
     if (p.state === 'Cycle review' && !crDone) { const cr = s.cycleReviews.find((x) => x.cycleId === cyc?.id); add('Cycle review', p, c, `Cycle ${cyc?.index} done${cr?.playerAt ? ` · ${fn}: “${(cr.improved ?? '').slice(0, 48)}”` : ` · ${fn}’s reflection pending`}.`, 'Re-rate the rubric and pick the next focus before the next plan.', `${fn} → next focus → plan.`, `/coach/cycle/${p.id}`, addBusinessDays(new Date(p.stateSince), 2).toISOString()); }
     if (p.state === 'Plan building' || crDone) add('Plan needed', p, c, crDone ? `Cycle review done. Build cycle ${(cyc?.index ?? 0) + 1}.` : `Onboarded. Goal: “${p.goal}”.`, 'Plans are promised within 2 business days.', `${fn} → Plan set → rep 1.`, `/coach/plan/${p.id}`, addBusinessDays(new Date(p.stateSince), 2).toISOString());
     for (const r of s.reviews.filter((x) => x.playerId === p.id && x.status === 'final' && !x.reaction && x.nudgedAt)) add('Not confirmed', p, c, `${fn} hasn’t confirmed your feedback: “${r.adjust.slice(0, 50)}”`, 'No “Got it” or question after 48 h. A gentle nudge went to the family; a one-line check-in usually clears it.', `${fn} commits to the next rep.`, `/coach/player/${p.id}?tab=feedback`, undefined, `ack:${r.id}`);
-    const covered = new Set(['reply-window', 'first-plan', 'rubric-cycle']);
+    const covered = new Set(['reply-window', 'first-plan', 'rubric-cycle', 'game-reply', 'confidence-check']);
     for (const { promise, risk } of promiseRisks(s, p)) if (!covered.has(promise.id)) add('Promise', p, c, risk.what, `Promise: ${promise.text}`, 'Keeps the promise on the family’s card.', `/coach/player/${p.id}`, risk.dueBy, `promise:${promise.id}:${p.id}`);
+    // v7: game logs (light unless the player asked), a gentle confidence flag, and the practice-to-game transfer cue.
+    const coaching = p.state !== 'Paused';
+    if (coaching) for (const g of (s.games ?? []).filter((x) => x.playerId === p.id && !x.reply && !x.seenAt)) add(g.wantsReply ? 'Game check-in' : 'Game log', p, c, `${fn}${g.opponent ? ` vs ${g.opponent}` : ''}: ${gameLine(g)} · felt ${FEEL_WORDS[g.confidence].toLowerCase()} (${g.confidence}/5)${g.focusTried ? ` · focus: ${TRIED_LABEL[g.focusTried].toLowerCase()}` : ''}`, g.wantsReply ? `${fn} asked for feedback on this game: ${tierReply(s, p)}.` : 'Light: no reply owed. Skim it, mark seen, or reply if something stands out.', `${fn} sees you watched the games, not just the drills.`, `/coach/player/${p.id}?tab=games`, g.wantsReply ? g.dueBy ?? undefined : undefined, `game:${g.id}`);
+    const dip = confidenceDip(s, p.id); if (coaching && dip && !dip.last.seenAt && !dip.last.reply) add('Confidence', p, c, `Game confidence dipped two games in a row (${dip.values.join(' → ')}).`, 'Coach-only flag. A short, specific note on something they did well usually helps more than a fix.', `${fn} hears from you before the next game.`, `/coach/player/${p.id}?tab=games`, undefined, `conf:${dip.last.id}`);
+    const tc = coaching ? transferCue(s, p) : null; if (tc) add('Game transfer', p, c, `Focus “${tc.cycle.focus}” shows up in games ${tc.pct}% of the time (${tc.label.toLowerCase()}).`, 'Practice reps aren’t carrying into games yet. Add a pressure rep (counted, timed, defender or tired legs) or a game cue.', `${fn} → a pressure rep that looks like the game.`, `/coach/player/${p.id}?tab=games`, undefined, `transfer:${tc.cycle.id}`);
     if (p.state === 'Onboarding') add('Activation', p, c, `${family(s, p).parentName} is onboarding${s.consents.some((x) => x.playerId === p.id) ? ' (consent on file)' : ' (consent pending)'}.`, 'Coaching starts once profile, goal, rhythm and consent are in.', 'Plan needed for you.', `/coach/player/${p.id}`);
     if (['Plan set', 'Work ready', 'Next step ready', 'Paused'].includes(p.state)) add('Upcoming', p, c, `${p.state}: ${fn} acts next.`, 'Nothing owed by you right now.', `Session ${new Date(p.nextSession + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}.`, `/coach/player/${p.id}`);
   }

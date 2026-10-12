@@ -1,3 +1,4 @@
+import { publicCard } from '../shared/timeline';
 import type { BallerApi, Me } from '../shared/api';
 import type { Clip, Command, Snapshot } from '../shared/domain';
 import { dispatch } from '../shared/engine';
@@ -7,7 +8,7 @@ import { buildOpsQueue, buildQueue, teamLoad } from '../shared/workflow';
 import { checkoutBlock, mockPriceToTier, mockStripeEvents, stripeToCommand, type MockOutcome } from '../shared/billing';
 import type { Tier } from '../shared/domain';
 
-const KEY = 'baller-connection-v6';
+const KEY = 'baller-connection-v7';
 /** Demo uploads: object URLs that live only in this tab (nothing leaves the browser). */
 const MEM = new Map<string, string>();
 const staticClip = (key: string) => `${import.meta.env.BASE_URL}${key}`;
@@ -15,7 +16,7 @@ const DEMO_STAFF: Record<string, Me> = { head: { id: 'u_head', name: 'Coach [You
 /** Demo: the shared engine in the browser, persisted to localStorage. The demo bar picks who you are. */
 export class DemoApi implements BallerApi {
   readonly mode = 'demo' as const; private s: Snapshot;
-  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings?.reviewsPerWeek && s.reflections && s.clips && s.subscriptions ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
+  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings?.reviewsPerWeek && s.reflections && s.clips && s.subscriptions && s.games ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
   private save() { localStorage.setItem(KEY, JSON.stringify(this.s)); }
   /** Resolve the demo persona for a command: staff by role, family members by the player they act on. */
   actor(cmd: Command, as?: Me): Actor {
@@ -35,7 +36,9 @@ export class DemoApi implements BallerApi {
   async requestPassword() {} async resetPassword() {}
   async get<T>(path: string): Promise<T> {
     if (path === '/api/team') return teamLoad(this.s) as T; if (path === '/api/outbox') { const app = location.origin + location.pathname.replace(/\/$/, ''); return [...this.s.outbox].reverse().map((m) => ({ ...m, body: m.body.replaceAll('{{APP}}', app).replaceAll('{{UNSUB}}', `${app}/#/account`), html: m.html?.replaceAll('{{APP}}', app).replaceAll('{{UNSUB}}', `${app}/#/account`) })) as T; } if (path === '/api/queue') return { coach: buildQueue(this.s), ops: buildOpsQueue(this.s) } as T;
-    if (path === '/api/calendar-link') return { url: '' } as T; throw new Error('Not available in demo');
+    if (path === '/api/calendar-link') return { url: '' } as T;
+    const cm = path.match(/^\/api\/card\/([a-f0-9]+)$/); if (cm) { const p = this.s.players.find((x) => x.card?.enabled && x.card.token === cm[1]); if (!p) throw new Error('This card link is off or was replaced.'); return publicCard(this.s, p) as T; }
+    throw new Error('Not available in demo');
   }
   /** Demo billing: the same checkout rules and Stripe-shaped events as the server simulator, run through the engine in the browser. */
   async post<T>(path: string, body?: unknown): Promise<T> {

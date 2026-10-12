@@ -11,6 +11,9 @@ export function playerCsv(s: Snapshot, pid: string) {
   for (const m of s.messages.filter((x) => x.playerId === pid)) rows.push(['message', m.at, m.from, m.text, m.linkUrl, ''].map(q).join(','));
   for (const h of s.habits.filter((x) => x.playerId === pid)) rows.push(['habit', h.date, h.key, '', '', ''].map(q).join(','));
   for (const d of s.digests.filter((x) => x.playerId === pid && x.status === 'approved')) rows.push(['digest', d.week, d.text, '', '', ''].map(q).join(','));
+  for (const g of (s.games ?? []).filter((x) => x.playerId === pid)) rows.push(['game', g.date, g.opponent ?? '', JSON.stringify(g.stats ?? {}), `confidence ${g.confidence} focus ${g.focus} energy ${g.energy} tried ${g.focusTried ?? ''}`, `${g.wellDone} | ${g.replay}${g.reply ? ` | coach: ${g.reply.feedback}` : ''}`].map(q).join(','));
+  for (const w of (s.wins ?? []).filter((x) => x.playerId === pid)) rows.push(['win', w.at, w.kind, w.text, '', ''].map(q).join(','));
+  for (const n of (s.timelineNotes ?? []).filter((x) => x.playerId === pid && x.status === 'approved' && x.kind !== 'cue')) rows.push(['coach-note', n.date, n.kind, n.text, '', ''].map(q).join(','));
   return rows.join('\r\n');
 }
 const ics = (d: string) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
