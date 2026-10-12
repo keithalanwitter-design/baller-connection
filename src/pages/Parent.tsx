@@ -5,6 +5,8 @@ import { weekKey } from '../../shared/time';
 import { clock, family, first, playerCycle, progress } from '../../shared/workflow';
 import { Moments, PathPanel, PlayerPicker, Track, UserMenu, useFamilyPlayer } from '../ui';
 import { ClipPrivacy, FocusCard } from '../v5';
+import { BillingPanel } from '../v6';
+import { subscriptionOf } from '../../shared/billing';
 import { CoachKnows, CycleReviewPlayer, PromiseCard, UnifiedInbox } from '../v4';
 import { plainFeedback } from '../../shared/personal';
 import { useEffect, useState } from 'react';
@@ -25,7 +27,7 @@ function Account({ p }: { p: Player }) {
     <section className="panel"><h3 className="display">Schedule</h3>{meetings.length === 0 ? <p className="dim">No sessions booked. Coach availability: {s.settings.availability}.</p> : <ul className="plain">{meetings.map((m) => <li key={m.id}><b>{shortWhen(m.at)}</b> · {m.kind === 'live' ? 'Live session' : m.kind === 'fit-call' ? 'Intro call' : 'Check-in'} with {userName(s, m.staffId)} ({m.minutes} min)</li>)}</ul>}
       {mode === 'live' ? cal && <a className="chip" href={cal}>📅 Add to my calendar (iCal)</a> : <button className="chip" onClick={() => download('sessions.ics', calendarIcs({ ...s, meetings: s.meetings.filter((m) => m.playerId === p.id) }), 'text/calendar')}>📅 Download .ics</button>}</section>
     <section className="panel" id="account"><h3 className="display">Account & privacy</h3><dl className="dl">
-      <div><dt>Plan</dt><dd>{p.tier} · billing {p.billing === 'comp' ? 'complimentary' : p.billing}</dd></div>
+      <div><dt>Plan</dt><dd>{p.tier} · see Billing below</dd></div>
       <div><dt>Coach</dt><dd>{userName(s, p.coachId)}</dd></div>
       <div><dt>Consent</dt><dd>{consent ? `Given by ${consent.guardianName}, ${shortWhen(consent.at)} (v${consent.version})` : 'Not yet recorded'}</dd></div>
       <div><dt>{fn}’s login</dt><dd>{login?.username ? `Username “${login.username}” · PIN set by you` : login?.email ? `Email ${login.email}` : 'None yet'}</dd></div></dl>
@@ -64,8 +66,9 @@ export default function Parent() {
         <CycleReviewPlayer p={p} me="parent" />
         <CoachKnows p={p} />
         <ClipPrivacy p={p} />
+        <BillingPanel p={p} />
         <Account p={p} />
-        <p className="small dim">No coaching homework for you. {canPause && <button className="link small" onClick={() => run({ type: 'pause', playerId: p.id })}>Pause plan</button>}</p>
+        <p className="small dim">No coaching homework for you. {canPause && <button className="link small" onClick={() => run({ type: 'pause', playerId: p.id })}>Pause coaching</button>}{p.state === 'Paused' && !subscriptionOf(s, p.id)?.pausedByBilling && <button className="link small" onClick={() => run({ type: 'resume', playerId: p.id })}>Resume coaching</button>} Pausing coaching doesn’t stop billing; to stop paying, cancel in Billing.</p>
       </main>
       <Moments role="parent" pid={p.id} />
     </div>

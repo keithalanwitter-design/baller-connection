@@ -38,5 +38,15 @@ ${rows.join('\n')}
 | Message link hint “a link only. File and film uploads aren’t supported” | “Links here; clips go with a check-in on Today” | Clips attach to check-ins, not messages |
 | Privacy page | Adds clip storage, who sees clips, 90-day deletion, under-13 consent | Clip privacy promise |
 | Consent text v2026-10 | v2026-10b adds short practice clips | Parental consent covers video for under-13s |
+
+## Copy changed in v6 (sign-in links, email, Stripe billing)
+| Was | Now | Why |
+|---|---|---|
+| Invite: “No payment is taken in the app.” | “Next: choose the plan and pay securely with Stripe (cancel anytime), then a 2-minute setup.” | Invite → pay → onboarding |
+| FAQ “No contracts. Pause anytime; progress is saved.” | Adds \`cancel-anytime\` (portal, coaching to period end, no fees) and \`payment-grace\` (7 days, then pause) | Billing truths are now enforced by webhooks + the sweep |
+| FAQ waitlist answer | \`spot-offer\`: a 48-hour link to the longest-waiting family | offerNext() + offer expiry |
+| Ops queue “Billing is tracked manually until Stripe is connected.” | “Payment runs through Stripe checkout …” | Stripe is the source of truth |
+| Sign in: email + password only | “Email me a sign-in link” (15 min, single use), password still works, under-13 PIN unchanged | Magic links |
+| Privacy page | Adds Stripe (payments; we never see card numbers) and Resend/Postmark (email delivery), email preferences and one-click unsubscribe | Processors must be named |
 `);
 console.log(`PROMISES.md: ${PROMISES.length} promises`);

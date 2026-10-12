@@ -26,6 +26,8 @@ describe('invites + consent', () => {
     expect(s.outbox.at(-1)!.body).toContain(r.created!.inviteToken!);
     s = dispatch(s, { type: 'acceptInvite', code: r.created!.inviteCode, parentName: 'Lou Rook', email: 'lou@demo.test', userId: 'u_lou' }, { id: 'public', role: 'public' }).snapshot;
     expect(P(s, kai.id).state).toBe('Onboarding'); const lou: Actor = { id: 'u_lou', role: 'parent', familyId: kai.familyId };
+    expect(() => dispatch(s, { type: 'completeOnboarding', playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' }, lou)).toThrow(/pay/i);
+    s = dispatch(s, { type: 'billingEvent', eventId: 'evt_kai_1', kind: 'checkout_completed', playerId: kai.id, tier: 'Foundation' }, { id: 'system', role: 'system' }).snapshot;
     expect(() => dispatch(s, { type: 'completeOnboarding', playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' }, lou)).toThrow(/consent/i);
     s = run(s, lou, { type: 'recordConsent', playerId: kai.id, guardianName: 'Lou Rook', agreed: true }, { type: 'completeOnboarding', playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' });
     expect(s.consents.find((c) => c.playerId === kai.id)?.at).toBeTruthy(); expect(P(s, kai.id).state).toBe('Plan building');

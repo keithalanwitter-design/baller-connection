@@ -15,6 +15,7 @@ describe('multi-user API flow with real sessions', () => {
     expect((await lou.post('/api/auth/accept-invite', { token, parentName: 'Lou Rook', email: 'lou@demo.test', password: 'kai-is-great-1' })).status).toBe(200);
     expect((await lou.cmd({ type: 'completeOnboarding', playerId: kai, position: 'Wing', goal: 'Finish left', learnStyle: 'Video', rhythm: '3 days' })).status).toBe(409);
     expect((await lou.cmd({ type: 'recordConsent', playerId: kai, guardianName: 'Lou Rook', agreed: true })).status).toBe(200);
+    expect((await lou.post('/api/billing/simulate', { playerId: kai, outcome: 'checkout' })).status).toBe(200);
     expect((await lou.cmd({ type: 'completeOnboarding', playerId: kai, position: 'Wing', goal: 'Finish left', learnStyle: 'Video', rhythm: '3 days' })).status).toBe(200);
     expect((await lou.post('/api/auth/player-login', { playerId: kai, username: 'kai.rook', pin: '4321' })).status).toBe(200);
     const asst = await login(env, 'assistant@demo.test');

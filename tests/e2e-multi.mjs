@@ -44,6 +44,8 @@ await ops.go('/ops/outbox'); await ops.pg.locator('.mailrow').first().click(); a
 const parent = await persona('parent', 1100); await parent.go(`/invite?token=${token}`);
 await parent.pg.fill('#ipn', 'Lou Rook'); await parent.pg.fill('#ie', 'lou@family.test'); await parent.pg.fill('#ipw', 'kai-is-great-1'); await parent.shot('23-invite-accept', false);
 await parent.pg.getByRole('button', { name: /Accept invite/ }).click(); await parent.pg.waitForURL(/welcome/); ok(!!(await cookies(parent)), 'parent account created + signed in');
+await parent.pg.getByRole('button', { name: 'Continue to secure checkout' }).click(); await parent.pg.waitForURL(/#\/checkout/); await parent.pg.getByRole('button', { name: /Subscribe/ }).click(); await parent.pg.waitForURL(/#\/welcome.*paid=1/); await parent.pg.getByText('Player profile').waitFor();
+ok((await parent.api('/api/snapshot')).snapshot.players.find((p) => p.name === 'Kai Rook').billing === 'paid', 'live: invite → checkout (simulated, signed webhook events) → paid → onboarding');
 await parent.pg.getByRole('radio', { name: 'Wing' }).click(); await parent.pg.getByRole('button', { name: 'Continue' }).click();
 await parent.pg.fill('#g', 'Finish with my left hand'); await parent.pg.getByRole('button', { name: 'Continue' }).click();
 await parent.pg.getByRole('radio', { name: 'Watch, then try' }).click(); await parent.pg.getByRole('button', { name: 'Continue' }).click();
@@ -110,6 +112,18 @@ await head.go('/coach/settings'); await head.pg.getByRole('checkbox').uncheck();
 await head.go('/coach/calendar'); await head.shot('33-calendar');
 await head.go('/coach/audit'); ok(/consent/i.test(await head.pg.locator('main').innerText()), 'audit log has the consent record'); await head.shot('34-audit');
 await ops.go('/ops/team'); await ops.shot('35-ops-team');
+// 11 · v6 magic link through the log outbox; single use; sign out everywhere
+const dana = await persona('dana'); await dana.go('/login?magic=1'); await dana.pg.locator('#ml').fill('dana@demo.test'); await dana.pg.getByRole('button', { name: 'Email me a sign-in link' }).click(); await dana.pg.getByText(/sign-in link is on its way/).waitFor(); await dana.shot('54-magic-request', false);
+const ml = (await head.api('/api/outbox')).find((m) => m.kind === 'magic-link' && m.to === 'dana@demo.test'); ok(ml && ml.status === 'logged' && /#\/magic\?token=[a-f0-9]{64}/.test(ml.body), 'magic link delivered via the log provider');
+const murl = ml.body.match(/(http\S+#\/magic\?token=[a-f0-9]{64})/)[1]; await dana.pg.goto(murl); await dana.pg.waitForURL(/#\/parent/, { timeout: 15000 }); ok(!!(await cookies(dana)), 'magic link signs Dana in → parent view');
+const dana2 = await persona('dana2'); await dana2.pg.goto(murl); await dana2.pg.getByText(/already used/).waitFor(); ok(!(await cookies(dana2)), 'magic link is single-use');
+// 12 · failed payment → grace → pause (simulator on the live server; DEMO=1 for the clock)
+await head.go('/coach/billing'); await head.pg.locator('.billtable .trow', { hasText: 'Avery Pine' }).getByRole('button', { name: 'Simulate failed payment' }).click(); await head.pg.waitForTimeout(600);
+ok(/Past due \(grace\)/i.test(await head.pg.locator('.billtable .trow', { hasText: 'Avery Pine' }).innerText()), 'live: failed payment → grace');
+const hasClock = await head.pg.getByRole('button', { name: /\+8 days/ }).count();
+if (hasClock) { await head.pg.getByRole('button', { name: /\+8 days/ }).click(); await head.pg.waitForTimeout(800); await head.go('/coach/billing'); ok(/Paused \(payment\)/i.test(await head.pg.locator('.billtable .trow', { hasText: 'Avery Pine' }).innerText()), 'live: grace over → paused'); }
+await dana.go('/parent?p=avery&tab=billing'); await dana.pg.reload(); await dana.pg.waitForTimeout(800); const dbt = await dana.pg.locator('#billing').innerText(); if (!/(Payment failed|paused for billing)/i.test(dbt)) console.log('DBT', dbt); ok(/(Payment failed|paused for billing)/i.test(dbt), 'live: parent sees the payment problem');
+await dana.go('/account'); await dana.pg.getByRole('button', { name: 'Sign out everywhere' }).click(); await dana.pg.waitForURL(/login/); ok(!(await cookies(dana)), 'sign out everywhere clears the session');
 // sign out
 await player.pg.getByRole('button', { name: 'Sign out' }).click(); await player.pg.waitForURL(/login/); ok(!(await cookies(player)), 'sign out clears the session');
 

@@ -1,7 +1,7 @@
 {
   "name": "baller-connection",
   "private": true,
-  "version": "5.0.0",
+  "version": "6.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,8 @@
     "test:e2e:multi": "node tests/e2e-multi.mjs",
     "db:migrate:local": "wrangler d1 migrations apply baller-connection --local",
     "db:migrate:remote": "wrangler d1 migrations apply baller-connection --remote",
-    "deploy": "npm run build:worker && wrangler deploy"
+    "deploy": "npm run build:worker && wrangler deploy",
+    "stripe:setup": "tsx scripts/stripe-setup.ts"
   },
   "dependencies": {
     "react": "^19.2.8",

@@ -226,3 +226,11 @@ kbd{font:700 .8rem ui-monospace,monospace;border:1px solid var(--line);border-bo
 .rv-right textarea.input{resize:vertical;min-height:2.6em}
 .rtimer{font:800 1.1rem/1 var(--disp);letter-spacing:.04em;padding:8px 10px;border-radius:10px;background:#EEF3FF;color:var(--blue);font-variant-numeric:tabular-nums}.rtimer small{opacity:.6;font-size:.75em}.rtimer.over{background:#FFF1E8;color:var(--orange)}
 kbd{font:600 .72rem/1 ui-monospace,monospace;border:1px solid currentColor;border-radius:4px;padding:1px 4px;opacity:.8}
+/* v6: billing, sign-in links, outbox */
+.planpick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.plan{display:flex;flex-direction:column;gap:4px;text-align:left;padding:14px;border-radius:14px;cursor:pointer;font:inherit;color:inherit;background:color-mix(in srgb,currentColor 6%,transparent);border:2px solid color-mix(in srgb,currentColor 22%,transparent)}.plan.on{border-color:#FF5E1A;background:color-mix(in srgb,#FF5E1A 14%,transparent)}.plan .pp{font-size:26px;font-weight:800}.plan .pp small{font-size:13px;font-weight:600;opacity:.7}.plan[disabled]{opacity:.45;cursor:not-allowed}@media(max-width:640px){.planpick{grid-template-columns:1fr}}
+.pill.bill-active{background:#DDF5E4;color:#145A2C}.pill.bill-past{background:#FFE7D6;color:#8A3A00}.pill.bill-paused{background:#FFE1E1;color:#8A1C1C}.pill.bill-canceled{background:#E6E8EE;color:#3B4256}.pill.bill-comp{background:#E5ECFF;color:#1E3A8A}.pill.bill-not{background:#FFF4CC;color:#6B5200}.pill.bill-ends{background:#FFF4CC;color:#6B5200}
+.pill.st-dead{background:#FFE1E1;color:#8A1C1C}.pill.st-queued{background:#FFF4CC;color:#6B5200}
+.billtable .trow{grid-template-columns:1.6fr .9fr 1.1fr 1.1fr .6fr 1.8fr}.billtable .trow.head{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,#5B6275);background:transparent;border:0}
+.mailprev{display:grid;gap:10px}.mailhtml{width:100%;min-height:420px;border:1px solid var(--line,#ddd);border-radius:10px;background:#fff}
+.stripe-sim .testpill{background:#FF5E1A;color:#0A1430;font-weight:800}
+.magicbox{margin:14px 0}.magicbox summary{cursor:pointer;font-weight:700}.magic{margin-top:10px}

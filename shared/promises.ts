@@ -2,6 +2,7 @@ import type { Player, Snapshot, Tier } from './domain';
 import { addBusinessDays, shortWhen, weekKey } from './time';
 import { CLIP_MAX_MB, CLIP_MAX_SEC, CLIP_RETENTION_DAYS } from './clips';
 import { capacity, clock, lastSubmission, playerCycle, unanswered } from './workflow';
+import { graceEnds, subscriptionOf } from './billing';
 
 /**
  * The promise ledger. Every promise the product makes in public copy, onboarding or email lives here,
@@ -112,9 +113,25 @@ export const PROMISES: ProgramPromise[] = [
     risk: () => null,
   },
   {
-    id: 'pause-anytime', text: 'No contracts. Pause anytime; progress is saved.', sources: ['FAQ'], tiers: ALL, kind: 'engine',
-    rule: 'pause/resume commands, allowed for parents from any active state; resume returns to the saved state.', familyScreen: 'Parent Account', coachAlert: 'Paused players leave the owed queue',
+    id: 'pause-anytime', text: 'No contracts. Pause coaching anytime; progress is saved. (Pausing coaching doesn’t stop billing: to stop paying, cancel in Billing.)', sources: ['FAQ', 'Parent billing'], tiers: ALL, kind: 'engine',
+    rule: 'pause/resume commands, allowed for parents from any active state; resume returns to the saved state. A billing pause can only be lifted by paying (or by staff).', familyScreen: 'Parent Account + Billing', coachAlert: 'Paused players leave the owed queue',
     status: (_s, p) => (p.state === 'Paused' ? ok('Paused. Nothing is due.') : null), risk: () => null,
+  },
+  {
+    id: 'cancel-anytime', text: 'Cancel anytime in Billing (Stripe’s secure portal). Coaching continues to the end of the month you paid for; no refunds for partial months, no fees.', sources: ['Home pricing', 'FAQ', 'Invite', 'Receipt email'], tiers: ALL, kind: 'engine',
+    rule: 'customer.subscription.updated with cancel_at_period_end keeps access; customer.subscription.deleted (or the sweep at period end) sets billing canceled, pauses coaching and frees the spot.', familyScreen: 'Parent Billing (“Ends <date>”)', coachAlert: 'Billing view status; notification on cancel',
+    status: (s, p) => { const sub = subscriptionOf(s, p.id); return sub?.cancelAtPeriodEnd && sub.currentPeriodEnd ? on(`Canceled. Coaching continues until ${shortWhen(sub.currentPeriodEnd)}`) : sub?.status === 'canceled' ? ok('Canceled. Nothing more is charged.') : null; }, risk: () => null,
+  },
+  {
+    id: 'payment-grace', text: 'If a payment fails, coaching keeps going for 7 days while you fix the card; then it pauses (progress saved) until the payment goes through.', sources: ['FAQ', 'Payment-failed email', 'Parent billing'], tiers: ALL, kind: 'engine',
+    rule: 'invoice.payment_failed → past_due + pastDueSince; sweep pauses after settings.graceDays (7); invoice.paid resumes automatically.', familyScreen: 'Parent Billing banner with the grace end date', coachAlert: 'Ops notification + billing view “Past due (grace)”',
+    status: (s, p) => { const sub = subscriptionOf(s, p.id); const ge = graceEnds(s, sub); if (!sub || sub.status !== 'past_due' || !ge) return null; return sub.pausedByBilling ? { state: 'missed', label: 'Paused until the payment goes through' } : { state: 'at-risk', label: `Payment failed: coaching continues until ${shortWhen(ge)}` }; },
+    risk: (s, p) => { const sub = subscriptionOf(s, p.id); const ge = graceEnds(s, sub); return sub?.status === 'past_due' && !sub.pausedByBilling && ge ? { what: `${p.name}’s payment failed (grace ends ${shortWhen(ge)})`, dueBy: ge } : null; },
+  },
+  {
+    id: 'spot-offer', text: 'Waitlisted? When a spot opens, the longest-waiting family gets an email with a link held for 48 hours, then it goes to the next family.', sources: ['FAQ', 'Waitlist email'], tiers: ALL, kind: 'engine',
+    rule: 'Whenever access ends (or an offer expires) offerNext() invites the oldest Waitlist player (Inner Circle only if that cap has room) with a 48 h invite of kind “offer”; the sweep expires it and offers the next.', familyScreen: 'Waitlist email + invite page', coachAlert: 'Ops notification “Spot offered …”',
+    status: (s, p) => { const inv = s.invites.find((i) => i.playerId === p.id && i.kind === 'offer' && i.status === 'pending'); return inv ? on(`Spot held for you until ${shortWhen(inv.expiresAt)}`) : null; }, risk: () => null,
   },
   {
     id: 'short-clips', text: `Short practice clips only: up to ${CLIP_MAX_SEC} seconds and ${CLIP_MAX_MB} MB (MP4, MOV or WebM), or a link. No full-game film breakdown.`, sources: ['FAQ', 'Log rep', 'How it works'], tiers: ALL, kind: 'engine',

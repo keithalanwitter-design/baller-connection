@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Logo } from '../App';
 import { perspective, useSnap, useStore } from '../store';
-import { TIER_INFO, replyLabel, type TimedNote, type Billing, type Drill, type OutboxEmail, type Player, type Settings, type Tier } from '../../shared/domain';
+import { TIER_INFO, replyLabel, type TimedNote, type Billing, type Drill, type Player, type Settings, type Tier } from '../../shared/domain';
 import { relative, shortWhen, weekKey } from '../../shared/time';
 import { OPS_KINDS, QUEUE_KINDS, buildOpsQueue, buildQueue, capacity, clock, family, first, guide, lastSubmission, pendingReview, playerAssignments, playerCycle, progress, staff, teamLoad, tierReply, userName, type OpsKind, type QueueKind } from '../../shared/workflow';
 import { playerCsv, calendarIcs } from '../../server/export';
@@ -17,6 +17,7 @@ import { DEMO_INVITE } from '../../shared/seed';
 import { lastReview, OWED } from '../../shared/workflow';
 import { ClipPlayer, NoteList, fmtSpent, useReviewTimer } from '../v5';
 import { fmtT } from '../../shared/clips';
+import { CoachBilling, Outbox } from '../v6';
 
 const k = (x: string) => x.split(' ')[0].toLowerCase().replace(/[^a-z]/g, '');
 const download = (name: string, text: string, type = 'text/csv') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); };
@@ -343,14 +344,6 @@ function SettingsPage() {
   </form>);
 }
 
-function Outbox() {
-  const s = useSnap(); const { api, mode } = useStore(); const [list, setList] = useState<OutboxEmail[] | null>(null); const [open, setOpen] = useState<string | null>(null);
-  useEffect(() => { api.get<OutboxEmail[]>('/api/outbox').then(setList).catch(() => setList([])); }, [api, s.version]);
-  return (<><h1 className="display">Outbox</h1><p className="dim">{mode === 'live' ? 'Every email the system sends, with its delivery status from the provider.' : 'Dev/demo: emails are logged here instead of sent.'} Status <b>logged</b> means the dev log provider; <b>sent</b> means Resend/Postmark accepted it.</p>
-    <ol className="queue">{(list ?? []).map((m) => <li key={m.id} className="panel mail"><button className="row gap mailrow" onClick={() => setOpen(open === m.id ? null : m.id)}><span className={`pill st-${m.status}`}>{m.status}</span><strong className="grow">{m.subject}</strong><span className="small dim">{m.to} · {m.kind} · {shortWhen(m.at)}</span></button>{open === m.id && <pre className="mailbody">{m.body}</pre>}</li>)}
-      {list?.length === 0 && <li className="dim">No emails yet.</li>}</ol></>);
-}
-
 export function CoachShell({ ops }: { ops?: boolean }) {
   const s = useSnap(); const { as } = useStore(); const role = as?.role; useNextShortcut();
   const q = buildQueue(s, as?.id); const n = q.filter((x) => OWED(x.kind)).length; const late = q.filter((x) => x.overdue).length; const oq = buildOpsQueue(s);
@@ -362,14 +355,14 @@ export function CoachShell({ ops }: { ops?: boolean }) {
         {ops ? L('/ops', <>Ops queue {oq.length > 0 && <b className={`badge ${oq.some((x) => x.overdue) ? 'late' : ''}`}>{oq.length}</b>}</>, true) : L('/coach', <>Action Center {n > 0 && <b className={`badge ${late ? 'late' : ''}`}>{n}</b>}</>, true)}
         {L(`${base}/inbox`, <>Inbox {unread > 0 && <b className="badge">{unread}</b>}</>)}{L(`${base}/roster`, 'Roster')}{L(`${base}/calendar`, 'Calendar')}
         {!ops && L('/coach/library', 'Library')}{!ops && L('/coach/digest', 'Weekly digest')}{(role === 'head' || role === 'ops') && L(`${base}/team`, 'Team')}
-        {(role === 'head' || role === 'ops') && L(`${base}/outbox`, 'Outbox')}{(role === 'head' || role === 'ops') && L(`${base}/audit`, 'Audit log')}{L(`${base}/settings`, 'Settings')}
+        {(role === 'head' || role === 'ops') && L(`${base}/billing`, 'Billing')}{(role === 'head' || role === 'ops') && L(`${base}/outbox`, 'Outbox')}{(role === 'head' || role === 'ops') && L(`${base}/audit`, 'Audit log')}{L(`${base}/settings`, 'Settings')}
       </nav><UserMenu dark /></aside>
       <main id="main" tabIndex={-1} className="cmain">
         <Routes>
           <Route index element={ops ? <OpsQueue /> : <ActionCenter />} /><Route path="roster" element={<Roster />} /><Route path="player/:id" element={<Profile />} />
           <Route path="review/:id" element={<Review />} /><Route path="cycle/:id" element={<CycleReviewCoach />} /><Route path="plan/:id" element={<PlanBuilder />} /><Route path="digest" element={<Digest />} />
           <Route path="library" element={<Library />} /><Route path="calendar" element={<Calendar />} /><Route path="team" element={<Team />} /><Route path="settings" element={<SettingsPage />} />
-          <Route path="outbox" element={<Outbox />} /><Route path="inbox" element={<Inbox />} /><Route path="audit" element={<SystemLog embedded />} />
+          <Route path="outbox" element={<Outbox />} /><Route path="billing" element={<CoachBilling />} /><Route path="inbox" element={<Inbox />} /><Route path="audit" element={<SystemLog embedded />} />
         </Routes>
       </main>
       <Moments role={ops ? 'ops' : 'coach'} />

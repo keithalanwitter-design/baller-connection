@@ -1,9 +1,11 @@
-import { CONSENT_TEXT, CONSENT_VERSION, type Command, type DomainEvent, type LifecycleState, type MessageContext, type NotificationType, type Player, type Snapshot, type Tier } from './domain';
+import { CONSENT_TEXT, CONSENT_VERSION, DEFAULT_PREFS, TIER_INFO, replyLabel, type Command, type Notification, type Subscription, type DomainEvent, type LifecycleState, type MessageContext, type NotificationType, type Player, type Snapshot, type Tier } from './domain';
 import { composeFeedback, plainFeedback, rhythmToday } from './personal';
 import { promiseRisks, reviewsAllowed, reviewedThisWeek } from './promises';
 import { sha256 } from './sha256';
 import { CLIP_RETENTION_DAYS, clipError, clipExpired, fmtT } from './clips';
 import { assertCan, type Actor } from './permissions';
+import { CATEGORY, quietUntil, render, wants, type EmailData, type EmailKind } from './emails';
+import { PRICE_CENTS, graceEnds, isPaid, subscriptionOf } from './billing';
 import { addBusinessDays, isoDay, officeDue, shortWhen, weekKey } from './time';
 import { lastReview, canTransition, capacity, clock, first, headCoach, lastSubmission, openAssignment, pendingReview, playerAssignments, playerCycle, progress, replyDue, staff, userName } from './workflow';
 
@@ -24,7 +26,7 @@ export function suggestTier(a: Record<string, string>): { fit: 'fit' | 'waitlist
 }
 const AGE: Record<string, number> = { 'Under 10': 9, '10–12': 11, '13–14': 13, '15–16': 15, '17+': 17 };
 
-export interface Result { snapshot: Snapshot; events: DomainEvent[]; created?: { inviteToken?: string; inviteCode?: string; userId?: string; playerId?: string } }
+export interface Result { snapshot: Snapshot; events: DomainEvent[]; created?: { inviteToken?: string; inviteCode?: string; userId?: string; playerId?: string; duplicate?: boolean } }
 
 /** Pure command handler. Checks permissions, guards transitions, emits events + notifications + outbox mail. */
 export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
@@ -36,18 +38,29 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
   const checkRev = (p: Player, rev?: number) => { if (rev !== undefined && rev !== (p.rev ?? 0)) throw new ConflictError(`${p.name} changed since you opened this (someone else acted). Reload to see the latest.`); };
   const guard = (p: Player) => { if (!canTransition(p.state, cmd.type)) throw new WorkflowError(`“${cmd.type}” is not allowed while ${p.name} is “${p.state}”.`); };
   const notify = (userIds: (string | undefined | null)[], type: NotificationType, text: string, link: string, playerId?: string, dedupe?: string) => {
-    for (const u of new Set(userIds.filter(Boolean) as string[])) { const key = `${u}:${dedupe ?? id('n')}`; if (s.notifications.some((n) => n.dedupe === key)) continue; s.notifications.push({ id: id('nt'), userId: u, type, text, link, playerId, at, dedupe: key }); }
+    const out: Notification[] = [];
+    for (const u of new Set(userIds.filter(Boolean) as string[])) { const key = `${u}:${dedupe ?? id('n')}`; if (s.notifications.some((n) => n.dedupe === key)) continue; const nn = { id: id('nt'), userId: u, type, text, link, playerId, at, dedupe: key }; s.notifications.push(nn); out.push(nn); }
+    return out;
   };
   const famUsers = (p: Player) => s.users.filter((u) => (u.role === 'parent' && u.familyId === p.familyId) || (u.role === 'player' && u.playerId === p.id)).map((u) => u.id);
   const ops = () => s.users.filter((u) => u.role === 'ops' && u.active).map((u) => u.id); const head = () => headCoach(s)?.id;
-  const mail = (to: string, subject: string, body: string, kind: string) => s.outbox.push({ id: id('em'), to, subject, body, at, status: 'queued', kind });
+  /** v6: templated email (text + HTML). Respects the recipient's preferences (essential mail always goes) and quiet hours (non-essential waits). */
+  const sendMail = (kind: EmailKind, to: string | null | undefined, data: EmailData, userId?: string | null) => {
+    if (!to) return false; const u = (userId ? s.users.find((x) => x.id === userId) : undefined) ?? s.users.find((x) => x.email === to && x.active); const cat = CATEGORY[kind];
+    if (!wants(u?.prefs, cat)) return false; const r = render(kind, { program: s.settings.programName, ...data });
+    s.outbox.push({ id: id('em'), to, subject: r.subject, body: r.text, html: r.html, at, status: 'queued', kind, category: cat, userId: u?.id ?? null, attempts: 0, sendAfter: quietUntil(t, u?.prefs, cat, s.settings.timezone), lastError: null }); return true;
+  };
+  /** Email these users (if they have an address and want this category). Returns who was emailed, so their in-app notification isn't emailed again in the roundup. */
+  const emailUsers = (userIds: (string | null | undefined)[], kind: EmailKind, data: EmailData) => { const done: string[] = []; for (const uid of new Set(userIds.filter(Boolean) as string[])) { const u = s.users.find((x) => x.id === uid && x.active); if (u?.email && sendMail(kind, u.email, { name: first(u.name), ...data }, u.id)) done.push(u.id); } return done; };
+  const markEmailed = (ns: Notification[], userIds: string[]) => { for (const x of ns) if (userIds.includes(x.userId)) x.emailedAt = at; };
   const milestone = (p: Player, key: string) => { if (!s.milestones.some((m) => m.playerId === p.id && m.key === key)) { s.milestones.push({ id: id('ms'), playerId: p.id, key, at }); log('milestone', key, p.id); } };
   const levelCheck = (p: Player, before: number) => { const after = progress(s, p.id).level; if (after > before) milestone(p, `Level ${after}`); };
   const applyReview = (p: Player, decision: 'approve' | 'retry', feedback: string, reviewerId: string) => {
     const sub = lastSubmission(s, p.id); const a = s.assignments.find((x) => x.id === sub?.assignmentId)!; const b = progress(s, p.id).level;
     if (decision === 'approve') { a.status = 'approved'; move(p, 'Next step ready', `Approved: ${a.title}`); if (s.reviews.filter((r) => r.playerId === p.id && r.decision === 'approve' && r.status === 'final').length === 1) milestone(p, 'First approval'); }
     else { a.status = 'retry'; s.assignments.push({ ...a, id: id('as'), order: a.order + 0.5, status: 'open' }); move(p, 'Work ready', `Another attempt: ${a.title}`); milestone(p, 'Honest retry'); }
-    notify(famUsers(p), 'feedback_ready', `${userName(s, reviewerId)} on ${a.title}: “${feedback.split('\n')[0].replace(/^✓ /, '').slice(0, 60)}”`, '/app', p.id); levelCheck(p, b);
+    const snippet = feedback.split('\n')[0].replace(/^✓ /, '').slice(0, 60); const ns = notify(famUsers(p), 'feedback_ready', `${userName(s, reviewerId)} on ${a.title}: “${snippet}”`, '/app', p.id);
+    markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'feedback-ready', { player: first(p.name), coach: userName(s, reviewerId), rep: a.title, snippet })); levelCheck(p, b);
   };
   const runSweep = () => {
     const n = clock(s).getTime(); const soon = s.settings.dueSoonHours * 36e5;
@@ -65,17 +78,58 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     for (const p of s.players.filter((x) => !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding', 'Paused'].includes(x.state))) {
       for (const { promise, risk } of promiseRisks(s, p)) notify([p.coachId], 'promise_risk', `Promise at risk: ${risk.what}.`, `/coach/player/${p.id}`, p.id, `risk:${promise.id}:${p.id}:${wk}`);
       const subs = s.submissions.filter((x) => x.playerId === p.id && weekKey(new Date(x.at)) === wk).length;
-      if (r.key === 'plan-drop') notify(famUsers(p), 'rhythm', `Plan drop: this week’s reps are on Today.`, '/app', p.id, `rhythm:plan:${p.id}:${wk}`);
+      if (r.key === 'plan-drop') { const ns = notify(famUsers(p), 'rhythm', `Plan drop: this week’s reps are on Today.`, '/app', p.id, `rhythm:plan:${p.id}:${wk}`); markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'plan-drop', { playerFirst: first(p.name), focus: playerCycle(s, p.id)?.focus })); }
       if (r.key === 'midweek' && subs === 0) { notify(famUsers(p).filter((u) => s.users.find((x) => x.id === u)?.role === 'player'), 'rhythm', `Mid-week check-in: log one rep tonight.`, '/app', p.id, `rhythm:mid:${p.id}:${wk}`); notify([p.coachId], 'rhythm', `${p.name} has no check-in yet this week.`, `/coach/player/${p.id}`, p.id, `rhythm:midc:${p.id}:${wk}`); }
       if (r.key === 'wrap' && !s.reflections.some((x) => x.playerId === p.id && x.week === wk)) notify(famUsers(p).filter((u) => s.users.find((x) => x.id === u)?.role === 'player'), 'rhythm', `Friday wrap: two lines on your week.`, '/app', p.id, `rhythm:wrap:${p.id}:${wk}`);
     }
     for (const r of s.reviews.filter((x) => x.status === 'final' && !x.reaction && !x.nudgedAt)) {
       const p = s.players.find((x) => x.id === r.playerId); const since = new Date(r.signedOffAt ?? r.at).getTime(); if (!p || p.state === 'Paused' || n - since < 48 * 36e5) continue;
       r.nudgedAt = clock(s).toISOString(); log('feedback', 'Gentle nudge: feedback not confirmed after 48 h', p.id);
-      notify(famUsers(p), 'rhythm', `Quick check: does ${first(userName(s, r.reviewerId))}’s note make sense? Tap “Got it” or ask a question.`, '/app', p.id, `nudge:${r.id}`);
+      const ns = notify(famUsers(p), 'rhythm', `Quick check: does ${first(userName(s, r.reviewerId))}’s note make sense? Tap “Got it” or ask a question.`, '/app', p.id, `nudge:${r.id}`);
+      markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'focus-nudge', { player: first(p.name), coachFirst: first(userName(s, r.reviewerId)) }));
     }
     const expired = s.clips.filter((c) => clipExpired(c, clock(s))); if (expired.length) { s.clips = s.clips.filter((c) => !expired.includes(c)); for (const c of expired) log('clip', `Clip removed after ${CLIP_RETENTION_DAYS} days`, c.playerId); }
-    for (const inv of s.invites.filter((i) => i.status === 'pending' && new Date(i.expiresAt).getTime() < n)) { inv.status = 'expired'; log('invite', `Invite expired (${inv.email})`, inv.playerId); notify(ops(), 'invite_expired', `Invite expired for ${userNameOfPlayer(inv.playerId)}.`, `/ops/player/${inv.playerId}`, inv.playerId, `expired:${inv.id}`); }
+    for (const inv of s.invites.filter((i) => i.status === 'pending' && new Date(i.expiresAt).getTime() < n)) {
+      inv.status = 'expired'; log('invite', `${inv.kind === 'offer' ? 'Spot offer' : 'Invite'} expired (${inv.email})`, inv.playerId); notify(ops(), 'invite_expired', `${inv.kind === 'offer' ? 'Spot offer' : 'Invite'} expired for ${userNameOfPlayer(inv.playerId)}.`, `/ops/player/${inv.playerId}`, inv.playerId, `expired:${inv.id}`);
+      const ip = s.players.find((x) => x.id === inv.playerId); if (inv.kind === 'offer' && ip?.state === 'Invited') move(ip, 'Waitlist', 'Spot offer expired: back on the waitlist; offering the next family');
+    }
+    // v6 billing: grace → pause; cancel-at-period-end → access ends at period end (also covers a missed Stripe webhook).
+    const grace = (s.settings.graceDays ?? 7) * 864e5;
+    for (const sub of s.subscriptions ?? []) {
+      const p = s.players.find((x) => x.id === sub.playerId); if (!p) continue;
+      if (sub.status === 'past_due' && !sub.pausedByBilling && sub.pastDueSince && n - new Date(sub.pastDueSince).getTime() >= grace) billingPause(p, sub, `payment still failing after the ${s.settings.graceDays ?? 7}-day grace`);
+      if (sub.status === 'active' && sub.cancelAtPeriodEnd && sub.currentPeriodEnd && new Date(sub.currentPeriodEnd).getTime() <= n) endAccess(p, sub, 'canceled; access ended at the end of the paid period');
+    }
+    offerNext();
+  };
+  /** Pause coaching for billing (progress saved). */
+  const billingPause = (p: Player, sub: Subscription, reason: string) => {
+    sub.pausedByBilling = true; sub.updatedAt = at; log('billing', `Coaching paused: ${reason}`, p.id);
+    if (p.state !== 'Paused' && !['Invited', 'Onboarding', 'Waitlist', 'Applied', 'Fit review'].includes(p.state)) { p.pausedFrom = p.state; move(p, 'Paused', `Billing: ${reason}`); }
+    const par = s.users.find((u) => u.role === 'parent' && u.familyId === p.familyId); sendMail('access-ended', par?.email ?? family(p).email, { player: first(p.name), reason }, par?.id);
+    notify([...famUsers(p), ...ops()], 'billing', `${p.name}’s coaching is paused: ${reason}.`, '/parent?tab=billing', p.id);
+  };
+  const billingResume = (p: Player, sub: Subscription, why: string) => {
+    if (!sub.pausedByBilling) return; sub.pausedByBilling = false;
+    if (p.state === 'Paused') { const to = p.pausedFrom ?? 'Plan building'; p.pausedFrom = null; move(p, to, `Billing: ${why}, coaching resumed`); notify([p.coachId, ...famUsers(p)], 'billing', `${p.name} is back: ${why}.`, `/coach/player/${p.id}`, p.id); }
+  };
+  /** Access ends (canceled at period end / deleted): the roster spot is freed and the next waitlisted family is offered it. */
+  const endAccess = (p: Player, sub: Subscription, reason: string) => { sub.status = 'canceled'; sub.cancelAtPeriodEnd = false; p.billing = 'canceled'; billingPause(p, sub, reason); offerNext(); };
+  const issueInvite = (p: Player, to: string, kind: 'invite' | 'offer') => {
+    s.invites.filter((i) => i.playerId === p.id && i.status === 'pending').forEach((i) => (i.status = 'revoked'));
+    const token = randomToken(); const code = code6(); const hours = kind === 'offer' ? s.settings.offerHours ?? 48 : s.settings.inviteDays * 24; const expiresAt = new Date(t.getTime() + hours * 36e5).toISOString();
+    s.invites.push({ id: id('inv'), playerId: p.id, email: to, tokenHash: sha256(token), codeHash: sha256(code), sentAt: at, expiresAt, createdBy: actor.id, status: 'pending', kind });
+    family(p).email = to; created.inviteToken = token; created.inviteCode = code;
+    sendMail(kind === 'offer' ? 'waitlist-open' : 'invite', to, { player: p.name, tier: p.tier, price: TIER_INFO[p.tier].price, token, code, expires: shortWhen(expiresAt) }); return expiresAt;
+  };
+  /** A spot is open: offer it to the longest-waiting family (Inner Circle only if that cap has room), time-limited. */
+  const offerNext = () => {
+    for (let k = 0; k < 20; k++) {
+      const c = capacity(s); if (c.open <= 0) return;
+      const nx = s.players.filter((x) => x.state === 'Waitlist' && family(x)?.email && (x.tier !== 'Inner Circle' || c.inner < c.innerMax)).sort((a, b) => a.stateSince.localeCompare(b.stateSince))[0]; if (!nx) return;
+      const exp = issueInvite(nx, family(nx).email, 'offer'); move(nx, 'Invited', `Spot opened (${c.used + 1}/${c.max}): offer held until ${shortWhen(exp)}`);
+      notify(ops(), 'billing', `Spot offered to ${nx.name}’s family (held until ${shortWhen(exp)}).`, `/ops/player/${nx.id}`, nx.id);
+    }
   };
   const startNext = (p: Player) => {
       const cy = playerCycle(s, p.id); const ended = !!cy && new Date(cy.endAt) < t; const q = ended ? undefined : playerAssignments(s, p.id).find((a) => a.status === 'queued');
@@ -91,21 +145,17 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       s.families.push(fam); s.players.push(p); s.applications.push({ id: id('app'), at, playerId: p.id, answers: cmd.answers, tier: r.tier, fit: r.fit, next: cmd.next });
       log('application', `${p.name} applied (${r.fit}, suggested ${r.tier}, wants ${cmd.next})`, p.id, undefined, 'Applied');
       notify(ops(), 'new_application', `New application: ${p.name} (${r.tier}${cmd.next === 'call' ? ', wants a call' : ''}).`, `/ops/player/${p.id}`, p.id);
-      if (fam.email) mail(fam.email, 'We got your application', `Hi ${fam.parentName}, thanks for applying for ${p.name}. A person reads every application and replies within 2 business days.`, 'application');
+      if (fam.email) sendMail('application', fam.email, { parent: fam.parentName, player: p.name });
       created.playerId = p.id; break;
     }
     case 'startFitReview': { const p = P(cmd.playerId); guard(p); move(p, 'Fit review', 'Ops opened the application'); break; }
-    case 'scheduleFitCall': { const p = P(cmd.playerId); s.meetings.push({ id: id('mt'), playerId: p.id, staffId: actor.id, at: cmd.at, minutes: 15, kind: 'fit-call', note: 'Intro / fit call', status: 'scheduled' }); log('schedule', `Fit call booked for ${shortWhen(cmd.at)}`, p.id); if (family(p).email) mail(family(p).email, 'Your intro call', `Your 15-minute call is booked for ${shortWhen(cmd.at)}.`, 'fit-call'); break; }
+    case 'scheduleFitCall': { const p = P(cmd.playerId); s.meetings.push({ id: id('mt'), playerId: p.id, staffId: actor.id, at: cmd.at, minutes: 15, kind: 'fit-call', note: 'Intro / fit call', status: 'scheduled' }); log('schedule', `Fit call booked for ${shortWhen(cmd.at)}`, p.id); sendMail('fit-call', family(p).email, { when: shortWhen(cmd.at) }); break; }
     case 'decideFit': { const p = P(cmd.playerId); guard(p); if (cmd.accept) return dispatch(input, { type: 'createInvite', playerId: p.id }, actor); move(p, 'Waitlist', 'Waitlisted by ops'); break; }
     case 'createInvite': {
       const p = P(cmd.playerId); guard(p); const c = capacity(s); const fam = family(p); const email = (cmd.email || fam.email || '').trim().toLowerCase();
       if (!email) throw new WorkflowError('An invite needs the parent’s email.');
       if (p.state !== 'Invited' && (c.open <= 0 || (p.tier === 'Inner Circle' && c.inner >= c.innerMax))) { move(p, 'Waitlist', c.open <= 0 ? `Roster full (${c.used}/${c.max})` : `Inner Circle full (${c.inner}/${c.innerMax})`); break; }
-      s.invites.filter((i) => i.playerId === p.id && i.status === 'pending').forEach((i) => (i.status = 'revoked'));
-      const token = randomToken(); const code = code6(); const expiresAt = new Date(t.getTime() + s.settings.inviteDays * 864e5).toISOString();
-      s.invites.push({ id: id('inv'), playerId: p.id, email, tokenHash: sha256(token), codeHash: sha256(code), sentAt: at, expiresAt, createdBy: actor.id, status: 'pending' });
-      fam.email = email; created.inviteToken = token; created.inviteCode = code;
-      mail(email, `${p.name} has a spot at ${s.settings.programName}`, `Hi ${fam.parentName},\n\n${p.name} has a spot on the ${p.tier} plan.\nAccept: /invite?token=${token}\nOr enter code ${code} at /invite.\nThis link expires ${shortWhen(expiresAt)}.`, 'invite');
+      issueInvite(p, email, 'invite');
       if (p.state === 'Invited') log('invite', `Invite re-sent to ${email}`, p.id); else move(p, 'Invited', `Invite sent to ${email} (${c.used + 1}/${c.max} spots)`); break;
     }
     case 'revokeInvite': { s.invites.filter((i) => i.playerId === cmd.playerId && i.status === 'pending').forEach((i) => (i.status = 'revoked')); log('invite', 'Invite revoked', cmd.playerId); break; }
@@ -120,6 +170,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       if (cmd.parentName) fam.parentName = cmd.parentName;
       inv.status = 'accepted'; inv.acceptedAt = at; inv.acceptedBy = user.id; created.userId = user.id; created.playerId = p.id;
       move(p, 'Onboarding', `${fam.parentName} accepted the invite`);
+      if (!s.consents.some((c) => c.playerId === p.id) || !isPaid(p)) sendMail('consent-request', user.email, { player: first(p.name), playerId: p.id }, user.id);
       notify([p.coachId, ...ops()], 'invite_accepted', `${fam.parentName} accepted ${p.name}’s invite.`, `/coach/player/${p.id}`, p.id); break;
     }
     case 'recordConsent': {
@@ -128,6 +179,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     }
     case 'completeOnboarding': {
       const p = P(cmd.playerId); guard(p); if (!cmd.goal.trim() || !cmd.rhythm.trim()) throw new WorkflowError('Goal and weekly rhythm are required.');
+      if (s.settings.requirePayment !== false && !isPaid(p)) throw new WorkflowError('Choose the plan and pay first (secure Stripe checkout; cancel anytime).');
       if (!s.consents.some((c) => c.playerId === p.id)) throw new WorkflowError('Parental consent is required before coaching starts.');
       Object.assign(p, { position: cmd.position, goal: cmd.goal.trim(), learnStyle: cmd.learnStyle, rhythm: cmd.rhythm, frustration: (cmd.frustration ?? '').trim(), proudOf: (cmd.proudOf ?? '').trim(), rubric: { 'Ball security': 1, Finishing: 1, Defense: 1, 'Shot form': 1, Confidence: 1 } });
       const b = progress(s, p.id).level; move(p, 'Plan building', 'Onboarding complete: coach owes first plan'); levelCheck(p, b);
@@ -200,7 +252,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     }
     case 'startNext': { const p = P(cmd.playerId); guard(p); startNext(p); break; }
     case 'pause': { const p = P(cmd.playerId); guard(p); p.pausedFrom = p.state; move(p, 'Paused', 'Paused'); break; }
-    case 'resume': { const p = P(cmd.playerId); guard(p); const to = p.pausedFrom ?? 'Plan building'; p.pausedFrom = null; move(p, to, 'Resumed'); break; }
+    case 'resume': { const p = P(cmd.playerId); guard(p); const bs = subscriptionOf(s, p.id); if (bs?.pausedByBilling && !['head', 'ops', 'system'].includes(actor.role)) throw new WorkflowError('Coaching is paused for billing. Update the payment (or restart the plan) in Billing and it resumes automatically.'); const to = p.pausedFrom ?? 'Plan building'; p.pausedFrom = null; move(p, to, 'Resumed'); break; }
     case 'sendMessage': {
       const p = P(cmd.playerId); if (!cmd.text.trim()) throw new WorkflowError('Empty message.'); if (!isUrl(cmd.linkUrl)) throw new WorkflowError('Links must start with http:// or https://');
       const from = actor.role === 'parent' ? 'parent' : actor.role === 'player' ? 'player' : 'coach'; const context: MessageContext = cmd.context ?? 'general';
@@ -210,7 +262,8 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       if (context === 'gameplan' && from !== 'coach' && !inThread('gameplan')) throw new WorkflowError('Game plans come from the coach.');
       const msg = addMessage(p, from, context, cmd.text.trim(), cmd.refId ?? null, cmd.linkUrl);
       log('message', `${from} → ${from === 'coach' ? 'family' : 'coach'} [${context}]: “${cmd.text.trim().slice(0, 50)}”`, p.id);
-      notify(from === 'coach' ? famUsers(p) : context === 'urgent' ? [p.coachId, head()] : [p.coachId], context === 'urgent' && from !== 'coach' ? 'overdue' : 'new_message', `${context === 'urgent' && from !== 'coach' ? 'URGENT · ' : ''}${userName(s, actor.id)}: “${cmd.text.trim().slice(0, 60)}”`, from === 'coach' ? `/inbox?t=${msg.thread}` : `/coach/player/${p.id}?tab=messages`, p.id); break;
+      const ns = notify(from === 'coach' ? famUsers(p) : context === 'urgent' ? [p.coachId, head()] : [p.coachId], context === 'urgent' && from !== 'coach' ? 'overdue' : 'new_message', `${context === 'urgent' && from !== 'coach' ? 'URGENT · ' : ''}${userName(s, actor.id)}: “${cmd.text.trim().slice(0, 60)}”`, from === 'coach' ? `/inbox?t=${msg.thread}` : `/coach/player/${p.id}?tab=messages`, p.id);
+      if (from !== 'coach') markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'reply-needed', { player: p.name, from: userName(s, actor.id), due: msg.dueBy ? shortWhen(msg.dueBy) : 'soon', snippet: cmd.text.trim().slice(0, 140), playerId: p.id })); break;
     }
     case 'markRead': { s.messages.forEach((m) => { if (m.playerId === cmd.playerId && m.authorId !== actor.id && !m.readBy[actor.id]) m.readBy = { ...m.readBy, [actor.id]: at }; }); break; }
     case 'toggleHabit': {
@@ -269,7 +322,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     case 'approveDigest': {
       const p = P(cmd.playerId); const wk = weekKey(t); const ex = s.digests.find((d) => d.playerId === p.id && d.week === wk);
       if (ex) Object.assign(ex, { text: cmd.text, status: 'approved', approvedAt: at, approvedBy: actor.id }); else s.digests.push({ id: id('dg'), playerId: p.id, week: wk, text: cmd.text, status: 'approved', approvedAt: at, approvedBy: actor.id });
-      log('digest', 'Weekly digest approved for parent', p.id); const fam = family(p); if (fam.email) mail(fam.email, `${first(p.name)}’s week`, cmd.text, 'digest'); break;
+      log('digest', 'Weekly digest approved for parent', p.id); const fam = family(p); const par = s.users.find((u) => u.role === 'parent' && u.familyId === p.familyId); sendMail('parent-digest', par?.email ?? fam.email, { playerFirst: first(p.name), text: cmd.text }, par?.id); break;
     }
     case 'saveDrill': {
       const d = cmd.drill; if (!d.title.trim() || d.reps < 1 || d.minutes < 1) throw new WorkflowError('A drill needs a title, sets and minutes.');
@@ -300,7 +353,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     case 'inviteStaff': {
       const email = cmd.email.trim().toLowerCase(); if (!/^\S+@\S+\.\S+$/.test(email)) throw new WorkflowError('Enter a valid email.'); if (s.users.some((u) => u.email === email)) throw new WorkflowError('That email already has an account.');
       const u = { id: cmd.userId ?? id('usr'), name: cmd.name.trim(), email, role: cmd.role, active: true }; s.users.push(u); created.userId = u.id;
-      mail(email, `You’ve been added to ${s.settings.programName}`, `Hi ${u.name}, you were added as ${cmd.role}. Set your password from the sign-in page with “Forgot / first time”.`, 'staff'); log('account', `Staff added: ${u.name} (${cmd.role})`); break;
+      sendMail('staff', email, { name: u.name, role: cmd.role }, u.id); log('account', `Staff added: ${u.name} (${cmd.role})`); break;
     }
     case 'markNotificationsRead': { s.notifications.forEach((n) => { if (n.userId === actor.id && !n.readAt && (!cmd.ids || cmd.ids.includes(n.id))) n.readAt = at; }); break; }
     case 'requestData': {
@@ -317,6 +370,56 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       } else log('privacy', 'Export delivered', r.playerId); break;
     }
     case 'sweep': { runSweep(); break; }
+    case 'billingEvent': {
+      s.subscriptions = s.subscriptions ?? []; s.billingEvents = s.billingEvents ?? [];
+      if (s.billingEvents.some((e) => e.id === cmd.eventId)) { created.duplicate = true; break; } // Stripe retries / replays: process each event once
+      const known = s.subscriptions.find((x) => (cmd.subscriptionId && x.subscriptionId === cmd.subscriptionId) || (!cmd.playerId && cmd.customerId && x.customerId === cmd.customerId));
+      const p = s.players.find((x) => x.id === (cmd.playerId ?? known?.playerId)); s.billingEvents.push({ id: cmd.eventId, kind: cmd.kind, at, playerId: p?.id ?? null });
+      if (!p) { log('billing', `Stripe ${cmd.kind} ignored: no matching player`); break; }
+      let sub = subscriptionOf(s, p.id); if (!sub) { sub = { id: id('subn'), playerId: p.id, familyId: p.familyId, tier: cmd.tier ?? p.tier, status: 'incomplete', customerId: null, subscriptionId: null, currentPeriodEnd: null, cancelAtPeriodEnd: false, pastDueSince: null, pausedByBilling: false, startedAt: at, updatedAt: at }; s.subscriptions.push(sub); }
+      const bsub: Subscription = sub;
+      if (cmd.customerId) bsub.customerId = cmd.customerId; if (cmd.subscriptionId) bsub.subscriptionId = cmd.subscriptionId; if (cmd.periodEnd) bsub.currentPeriodEnd = cmd.periodEnd; bsub.updatedAt = at;
+      const par = s.users.find((u) => u.role === 'parent' && u.familyId === p.familyId); const to = par?.email ?? family(p).email; const price = (x: Tier) => `$${TIER_INFO[x].price}/mo`;
+      const perWeek = (x: Tier) => { const rv = s.settings.reviewsPerWeek?.[x] ?? 99; return rv >= 99 ? 'every submission reviewed' : `${rv} review${rv === 1 ? '' : 's'}/week`; };
+      const changeTier = (nt?: Tier | null) => {
+        if (!nt) return; bsub.tier = nt; if (nt === p.tier) return; const from = p.tier; p.tier = nt; p.rev = (p.rev ?? 0) + 1;
+        log('billing', `Plan changed ${from} → ${nt} (${price(nt)}): ${perWeek(nt)}, replies ${replyLabel(s.settings.sla[nt])}`, p.id);
+        notify([p.coachId, ...famUsers(p)], 'billing', `${p.name} is now on ${nt}: ${perWeek(nt)}, replies ${replyLabel(s.settings.sla[nt])}.`, '/parent?tab=billing', p.id);
+      };
+      const recover = (why: string) => { const was = bsub.status; bsub.status = 'active'; bsub.pastDueSince = null; p.billing = 'paid'; billingResume(p, bsub, why); return was; };
+      switch (cmd.kind) {
+        case 'checkout_completed': { changeTier(cmd.tier); bsub.cancelAtPeriodEnd = false; bsub.currentPeriodEnd = bsub.currentPeriodEnd ?? new Date(t.getTime() + 30 * 864e5).toISOString(); recover('payment set up'); log('billing', `Checkout complete: ${p.tier} ${price(p.tier)} via Stripe`, p.id); notify([...ops(), ...(par ? [par.id] : [])], 'billing', `Payment set up for ${p.name} (${p.tier}, ${price(p.tier)}).`, '/parent?tab=billing', p.id); break; }
+        case 'invoice_paid': { if (cmd.amount === 0) break; const was = recover('payment received'); log('billing', `Payment received${cmd.amount ? ` $${(cmd.amount / 100).toFixed(2)}` : ''}${was === 'past_due' ? ' (past-due balance cleared)' : ''}`, p.id); sendMail('payment-receipt', to, { player: first(p.name), tier: p.tier, amount: cmd.amount ?? PRICE_CENTS[p.tier], next: bsub.currentPeriodEnd ? shortWhen(bsub.currentPeriodEnd) : '' }, par?.id); break; }
+        case 'invoice_failed': {
+          bsub.status = 'past_due'; bsub.pastDueSince = bsub.pastDueSince ?? at; p.billing = 'past_due'; const ge = graceEnds(s, bsub)!;
+          log('billing', `Payment failed: ${s.settings.graceDays ?? 7}-day grace until ${shortWhen(ge)}, then coaching pauses`, p.id);
+          sendMail('payment-failed', to, { player: first(p.name), tier: p.tier, graceEnds: shortWhen(ge), graceDays: s.settings.graceDays ?? 7 }, par?.id);
+          notify([...(par ? [par.id] : []), ...ops()], 'billing', `Payment failed for ${p.name}. Coaching continues until ${shortWhen(ge)}; update the card to keep going.`, '/parent?tab=billing', p.id); break;
+        }
+        case 'subscription_updated': {
+          changeTier(cmd.tier); const st = cmd.status ?? 'active';
+          if (st === 'canceled' || st === 'incomplete_expired') { endAccess(p, bsub, 'subscription canceled'); break; }
+          if (st === 'past_due' || st === 'unpaid') { bsub.status = 'past_due'; bsub.pastDueSince = bsub.pastDueSince ?? at; p.billing = 'past_due'; }
+          else if (cmd.paused) { if (bsub.status !== 'paused') { bsub.status = 'paused'; billingPause(p, bsub, 'billing paused by the family'); } }
+          else if ((st === 'active' || st === 'trialing') && bsub.status !== 'active') recover(bsub.status === 'paused' ? 'billing resumed' : 'payment received');
+          if (cmd.cancelAtPeriodEnd !== undefined && !!cmd.cancelAtPeriodEnd !== !!bsub.cancelAtPeriodEnd) {
+            bsub.cancelAtPeriodEnd = !!cmd.cancelAtPeriodEnd; const end = bsub.currentPeriodEnd ? shortWhen(bsub.currentPeriodEnd) : 'the end of the paid period';
+            log('billing', bsub.cancelAtPeriodEnd ? `Canceled: coaching continues until ${end}` : 'Cancellation undone', p.id);
+            notify([p.coachId, ...ops(), ...(par ? [par.id] : [])], 'billing', bsub.cancelAtPeriodEnd ? `${p.name}’s plan is canceled; coaching continues until ${end}.` : `${p.name}’s cancellation was undone.`, '/parent?tab=billing', p.id);
+          }
+          break;
+        }
+        case 'subscription_deleted': { endAccess(p, bsub, 'subscription canceled'); break; }
+      }
+      break;
+    }
+    case 'joinWaitlist': { const p = P(cmd.playerId); if (!(p.state === 'Paused' && p.billing === 'canceled')) throw new WorkflowError('Only a canceled player can rejoin the waitlist.'); p.pausedFrom = null; move(p, 'Waitlist', 'Rejoined the waitlist (returning family)'); notify(ops(), 'billing', `${p.name}’s family rejoined the waitlist.`, `/ops/player/${p.id}`, p.id); break; }
+    case 'setEmailPrefs': {
+      const uid = cmd.userId && (actor.role === 'system' || actor.role === 'head') ? cmd.userId : actor.id; const u = s.users.find((x) => x.id === uid); if (!u) throw new WorkflowError('Unknown user');
+      const next = { ...DEFAULT_PREFS, ...(u.prefs ?? {}), ...cmd.prefs }; for (const h of [next.quietStart, next.quietEnd]) if (!Number.isInteger(h) || h < 0 || h > 23) throw new WorkflowError('Quiet hours are whole hours 0–23.');
+      u.prefs = next; log('account', `Email settings: coaching ${next.coaching ? 'on' : 'off'}, digest ${next.digest ? 'on' : 'off'}, updates ${next.updates ? 'on' : 'off'}, quiet ${next.quietStart}:00–${next.quietEnd}:00${actor.role === 'system' ? ' (one-click unsubscribe)' : ''}`, u.playerId ?? null); break;
+    }
+
     case 'generateDigests': {
       const wk = weekKey(t); const cut = t.getTime() - 7 * 864e5; let n = 0;
       for (const p of s.players.filter((x) => !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(x.state))) {

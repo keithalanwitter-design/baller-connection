@@ -41,7 +41,12 @@ export function seed(base = new Date()): Snapshot {
       { id: 'mt1', playerId: 'riley', staffId: 'u_asst', at: new Date(base.getTime() + 26 * 36e5).toISOString(), minutes: 30, kind: 'live', note: 'Weekly live session', status: 'scheduled' },
       { id: 'mt2', playerId: 'avery', staffId: 'u_head', at: new Date(base.getTime() + 72 * 36e5).toISOString(), minutes: 20, kind: 'check-in', note: 'Monthly video check-in', status: 'scheduled' },
     ],
-    notifications: [], outbox: [], dataRequests: [], clips: [{ id: 'clip_riley', playerId: 'riley', assignmentId: 'a_ri1', submissionId: 's_ri1', storageKey: DEMO_CLIP_KEY, mime: 'video/mp4', bytes: 258875, durationSec: 12, watchFor: 'My feet on the catch from the left wing', uploadedBy: 'u_riley', at: h(30), deleteAfter: new Date(new Date(h(30)).getTime() + 90 * 864e5).toISOString(), deletedAt: null }],
+    notifications: [], outbox: [], dataRequests: [], billingEvents: [],
+    // v6: Stripe test-mode subscriptions for the two paying demo families (ids are fake; nothing is charged).
+    subscriptions: [
+      { id: 'subn_avery', playerId: 'avery', familyId: 'f_pine', tier: 'Development', status: 'active', customerId: 'cus_test_pine', subscriptionId: 'sub_test_avery', currentPeriodEnd: new Date(base.getTime() + 18 * 864e5).toISOString(), cancelAtPeriodEnd: false, pastDueSince: null, pausedByBilling: false, startedAt: h(300), updatedAt: h(300) },
+      { id: 'subn_riley', playerId: 'riley', familyId: 'f_moss', tier: 'Inner Circle', status: 'active', customerId: 'cus_test_moss', subscriptionId: 'sub_test_riley', currentPeriodEnd: new Date(base.getTime() + 9 * 864e5).toISOString(), cancelAtPeriodEnd: false, pastDueSince: null, pausedByBilling: false, startedAt: h(400), updatedAt: h(400) },
+    ], clips: [{ id: 'clip_riley', playerId: 'riley', assignmentId: 'a_ri1', submissionId: 's_ri1', storageKey: DEMO_CLIP_KEY, mime: 'video/mp4', bytes: 258875, durationSec: 12, watchFor: 'My feet on the catch from the left wing', uploadedBy: 'u_riley', at: h(30), deleteAfter: new Date(new Date(h(30)).getTime() + 90 * 864e5).toISOString(), deletedAt: null }],
     reflections: [{ id: 'rf_av', playerId: 'avery', week: weekKey(new Date(h(70))), text: 'Left hand felt less scary by Thursday. Still rushing on game speed.', feel: 4, at: h(70) }], cycleReviews: [],
     families: [
       { id: 'f_pine', parentName: 'Dana Pine', email: 'dana@demo.test' }, { id: 'f_moss', parentName: 'Chris Moss', email: 'chris@demo.test' },

@@ -4,8 +4,10 @@ import { dispatch } from '../shared/engine';
 import { SYSTEM, type Actor } from '../shared/permissions';
 import { seed } from '../shared/seed';
 import { buildOpsQueue, buildQueue, teamLoad } from '../shared/workflow';
+import { checkoutBlock, mockPriceToTier, mockStripeEvents, stripeToCommand, type MockOutcome } from '../shared/billing';
+import type { Tier } from '../shared/domain';
 
-const KEY = 'baller-connection-v5';
+const KEY = 'baller-connection-v6';
 /** Demo uploads: object URLs that live only in this tab (nothing leaves the browser). */
 const MEM = new Map<string, string>();
 const staticClip = (key: string) => `${import.meta.env.BASE_URL}${key}`;
@@ -13,7 +15,7 @@ const DEMO_STAFF: Record<string, Me> = { head: { id: 'u_head', name: 'Coach [You
 /** Demo: the shared engine in the browser, persisted to localStorage. The demo bar picks who you are. */
 export class DemoApi implements BallerApi {
   readonly mode = 'demo' as const; private s: Snapshot;
-  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings?.reviewsPerWeek && s.reflections && s.clips ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
+  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings?.reviewsPerWeek && s.reflections && s.clips && s.subscriptions ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
   private save() { localStorage.setItem(KEY, JSON.stringify(this.s)); }
   /** Resolve the demo persona for a command: staff by role, family members by the player they act on. */
   actor(cmd: Command, as?: Me): Actor {
@@ -32,10 +34,22 @@ export class DemoApi implements BallerApi {
   async setPlayerPin(b: { playerId: string; username: string }) { await this.dispatch({ type: 'setPlayerLogin', playerId: b.playerId, username: b.username }, { id: '', name: '', role: 'parent' }); }
   async requestPassword() {} async resetPassword() {}
   async get<T>(path: string): Promise<T> {
-    if (path === '/api/team') return teamLoad(this.s) as T; if (path === '/api/outbox') return [...this.s.outbox].reverse() as T; if (path === '/api/queue') return { coach: buildQueue(this.s), ops: buildOpsQueue(this.s) } as T;
+    if (path === '/api/team') return teamLoad(this.s) as T; if (path === '/api/outbox') { const app = location.origin + location.pathname.replace(/\/$/, ''); return [...this.s.outbox].reverse().map((m) => ({ ...m, body: m.body.replaceAll('{{APP}}', app).replaceAll('{{UNSUB}}', `${app}/#/account`), html: m.html?.replaceAll('{{APP}}', app).replaceAll('{{UNSUB}}', `${app}/#/account`) })) as T; } if (path === '/api/queue') return { coach: buildQueue(this.s), ops: buildOpsQueue(this.s) } as T;
     if (path === '/api/calendar-link') return { url: '' } as T; throw new Error('Not available in demo');
   }
-  async post<T>(): Promise<T> { throw new Error('Not available in demo'); }
+  /** Demo billing: the same checkout rules and Stripe-shaped events as the server simulator, run through the engine in the browser. */
+  async post<T>(path: string, body?: unknown): Promise<T> {
+    const b = (body ?? {}) as { playerId?: string; tier?: Tier; outcome?: MockOutcome }; const p = this.s.players.find((x) => x.id === b.playerId);
+    if (path === '/api/billing/checkout') { if (!p) throw new Error('Not found'); const bl = checkoutBlock(this.s, p, b.tier ?? p.tier); if (bl) throw new Error(bl.error); return { url: `#/checkout?p=${p.id}&tier=${encodeURIComponent(b.tier ?? p.tier)}`, simulated: true } as T; }
+    if (path === '/api/billing/portal') return { url: `#/billing/portal?p=${b.playerId}`, simulated: true } as T;
+    if (path === '/api/billing/simulate') {
+      if (!p || !b.outcome) throw new Error('Not found'); if (b.outcome === 'checkout') { const bl = checkoutBlock(this.s, p, b.tier ?? p.tier); if (bl) throw new Error(bl.error); }
+      for (const e of mockStripeEvents(this.s, p.id, b.outcome, b.tier)) { const cmd = stripeToCommand(e, mockPriceToTier); if (cmd) this.s = dispatch(this.s, cmd, SYSTEM).snapshot; }
+      this.save(); return { ok: true, snapshot: this.s } as T;
+    }
+    if (path === '/api/auth/magic' || path === '/api/auth/logout-all') throw new Error('Sign-in links work on the live server. In the demo, use the demo bar.');
+    throw new Error('Not available in demo');
+  }
   url() { return ''; }
   async uploadClip(playerId: string, file: Blob, meta: { durationSec: number; mime: string; watchFor: string }, as?: Me) {
     const clipId = `clip_${Date.now().toString(36)}`; const r = await this.dispatch({ type: 'registerClip', playerId, clipId, storageKey: `mem:${clipId}`, mime: meta.mime, bytes: file.size, durationSec: meta.durationSec, watchFor: meta.watchFor }, as);

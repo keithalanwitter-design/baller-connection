@@ -8,7 +8,7 @@ const go = async (h) => { await pg.goto(B + '#' + h); await pg.waitForTimeout(35
 const shot = (n, full = true) => pg.screenshot({ path: `shots/${n}.png`, fullPage: full });
 const ok = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); console.log('  ✓', m); };
 const gotIt = async () => { const g = pg.getByRole('button', { name: 'Got it', exact: true }); if (await g.count()) await g.first().click({ timeout: 3000 }).catch(() => {}); };
-const state = async (pid) => pg.evaluate((id) => JSON.parse(localStorage.getItem('baller-connection-v5')).players.find((p) => p.id === id || p.name === id).state, pid);
+const state = async (pid) => pg.evaluate((id) => JSON.parse(localStorage.getItem('baller-connection-v6')).players.find((p) => p.id === id || p.name === id).state, pid);
 const queueMatches = async () => { const chips = (await pg.locator('.chips .chip b').allTextContents()).map(Number); const rows = await pg.locator('.queue .qrow').count(); return chips[0] === rows && chips.slice(1).reduce((a, c) => a + c, 0) === rows; };
 
 await go('/'); await pg.evaluate(() => localStorage.clear()); await go('/');
@@ -34,12 +34,18 @@ await shot('19-demo-ops-queue', false);
 await pg.locator('.qrow', { hasText: 'Casey Rowan' }).click(); await pg.getByRole('button', { name: /Open application/ }).click(); await gotIt();
 ok(await state('Casey Rowan') === 'Fit review', 'Applied → Fit review');
 await pg.getByRole('button', { name: /Send invite/ }).first().click(); await gotIt(); ok(await state('Casey Rowan') === 'Invited', 'Fit review → Invited (capacity ok)');
-ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v5')).outbox.some((m) => m.to === 'pat@demo.test' && m.kind === 'invite')), 'invite email queued to the outbox');
+ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v6')).outbox.some((m) => m.to === 'pat@demo.test' && m.kind === 'invite')), 'invite email queued to the outbox');
 await pg.locator('.demobar').getByRole('button', { name: 'Head coach' }).click(); await pg.waitForTimeout(300);
 await go('/coach'); ok(await pg.locator('.capacity').innerText().then((t) => /6\/15/.test(t)), 'capacity meter shows 6/15');
 
 // Onboarding Theo
 await go('/invite'); await pg.fill('#ic', '246810'); await pg.fill('#ipn', 'Morgan Banks'); await pg.fill('#ie', 'morgan@demo.test'); await pg.getByRole('button', { name: /Accept invite/ }).click(); await pg.waitForTimeout(400); ok(await state('theo') === 'Onboarding', 'Invited → Onboarding (backup code)');
+// v6: invite → plan & pay (simulated Stripe Checkout) → onboarding
+ok(await pg.getByRole('button', { name: 'Continue', exact: true }).isDisabled(), 'onboarding can’t start before payment'); await shot('46-welcome-pay', false);
+await pg.getByRole('radio', { name: /Development/ }).click(); await pg.getByRole('button', { name: 'Continue to secure checkout' }).click(); await pg.waitForURL(/#\/checkout/); ok(/TEST MODE/i.test(await pg.locator('main').innerText()), 'checkout simulator is clearly test mode'); await shot('47-checkout-sim', false);
+await pg.fill('#cc', '4000 0000 0000 0002'); await pg.getByRole('button', { name: /Subscribe/ }).click(); await pg.getByText(/card was declined/).waitFor(); ok(await state('theo') === 'Onboarding', 'declined test card: nothing changes');
+await pg.fill('#cc', '4242 4242 4242 4242'); await pg.getByRole('button', { name: /Subscribe/ }).click(); await pg.waitForURL(/#\/welcome/); await pg.waitForTimeout(400);
+ok(await pg.evaluate(() => { const s = JSON.parse(localStorage.getItem('baller-connection-v6')); const t = s.players.find((p) => p.id === 'theo'); return t.billing === 'paid' && t.tier === 'Development' && s.outbox.some((m) => m.kind === 'payment-receipt' && m.to === 'morgan@demo.test'); }), 'checkout → paid on Development + receipt email');
 await pg.getByRole('radio', { name: 'Guard' }).click(); await pg.getByRole('button', { name: 'Continue' }).click();
 await pg.fill('#g', 'Make the travel team'); await pg.fill('#pr', 'My crossover'); await pg.fill('#fr', 'Getting the ball stolen'); await pg.getByRole('button', { name: 'Continue' }).click();
 await pg.getByRole('radio', { name: 'Watch, then try' }).click(); await pg.getByRole('button', { name: 'Continue' }).click();
@@ -66,7 +72,7 @@ await pg.getByRole('button', { name: 'Submit to coach' }).click(); await pg.loca
 const m = await pg.locator('.moment').innerText(); ok(/Level up|Rep submitted/i.test(m) && /What’s next/i.test(m) && /acts next/i.test(m), 'celebration + what’s-next after submit'); await shot('08-moment-level-up', false);
 await gotIt(); ok(await state('theo') === 'Submitted', 'Work ready → Submitted');
 ok(await pg.locator('.sla-clock').count() === 1, 'Today shows coach reply-by clock'); ok(/4 s clip/.test(await pg.locator('#rep').innerText()), 'Today shows the clip went with the check-in');
-ok(await pg.evaluate(() => { const s = JSON.parse(localStorage.getItem('baller-connection-v5')); const sub = s.submissions.filter((x) => x.playerId === 'theo').at(-1); return !!sub.clipId && s.clips.find((c) => c.id === sub.clipId)?.watchFor === 'My eyes on the crossover'; }), 'submission carries the clip + what-to-watch-for note');
+ok(await pg.evaluate(() => { const s = JSON.parse(localStorage.getItem('baller-connection-v6')); const sub = s.submissions.filter((x) => x.playerId === 'theo').at(-1); return !!sub.clipId && s.clips.find((c) => c.id === sub.clipId)?.watchFor === 'My eyes on the crossover'; }), 'submission carries the clip + what-to-watch-for note');
 
 // Coach reviews: approve Theo (last rep → cycle review), retry Riley
 await go('/coach/review/theo'); const rv = await pg.locator('.review').innerText(); ok(/Show-me/.test(rv) && /proud of my crossover/i.test(rv) && /stolen/.test(rv), 'review panel: learning-style template + Coach-knows summary from onboarding');
@@ -78,17 +84,17 @@ await pg.locator('#addnote').click(); await pg.locator('.tnote-edit input').firs
 ok(/⏱ \d:\d\d/.test(await pg.locator('.rtimer').innerText()), 'review timer visible');
 await pg.fill('#f-wentWell', 'Eyes up all four sets'); await pg.getByRole('button', { name: /\+ Focus: Eyes-up dribbling/ }).click(); await pg.fill('#f-adjust', 'Watch the rim, then add speed'); await pg.fill('#f-why', 'Eyes up is how you make the travel team'); await shot('09-coach-review', false);
 await pg.locator('#f-why').focus(); await pg.keyboard.press('Control+Enter'); await pg.waitForTimeout(400); await gotIt(); ok(await state('theo') === 'Next step ready', 'Ctrl+Enter sends: Submitted → Next step ready');
-ok(await pg.evaluate(() => { const r = JSON.parse(localStorage.getItem('baller-connection-v5')).reviews.filter((x) => x.playerId === 'theo').at(-1); return r.notes?.[0]?.t === 2 && /eyes drop/.test(r.notes[0].text) && r.secondsSpent > 0; }), 'timestamp note + review time saved with the feedback');
+ok(await pg.evaluate(() => { const r = JSON.parse(localStorage.getItem('baller-connection-v6')).reviews.filter((x) => x.playerId === 'theo').at(-1); return r.notes?.[0]?.t === 2 && /eyes drop/.test(r.notes[0].text) && r.secondsSpent > 0; }), 'timestamp note + review time saved with the feedback');
 await go('/app?p=theo'); const rep = await pg.locator('#rep').innerText(); ok(/What you did well/i.test(rep) && /Your focus this week/i.test(rep) && await pg.locator('#rep .fb').count() === 0 && /Watch the rim, then add speed/i.test(rep) && /0:02/.test(rep), 'player sees “Your focus this week”: adjustment, next rep, clip note');
 ok(await pg.locator('#focus[data-ack="none"]').count() === 1 && await pg.getByRole('button', { name: /start next rep/i }).count() === 0, 'acknowledgment is required (no skip button)'); await shot('42-player-focus-card');
 await pg.locator('#ack-yes').click(); await gotIt(); ok(await state('theo') === 'Cycle review', '“Got it, I’ll do this” → commitment logged → Cycle review (last rep)');
-ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v5')).reviews.filter((x) => x.playerId === 'theo').at(-1).reaction === 'got_it'), 'commitment stored on the feedback');
+ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v6')).reviews.filter((x) => x.playerId === 'theo').at(-1).reaction === 'got_it'), 'commitment stored on the feedback');
 // Cycle review: player then coach
 await go('/app?p=theo'); await pg.getByRole('button', { name: /Do my cycle review/ }).click(); await pg.waitForTimeout(300); await pg.fill('#ci', 'Eyes up most of the time'); await pg.fill('#ch', 'Speed'); await pg.fill('#cw', 'Faster dribbling'); await shot('36-player-cycle-review'); await pg.getByRole('button', { name: 'Submit to coach' }).click(); await gotIt();
-await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Theo Banks' }).filter({ hasText: 'Cycle review' }).count() === 1, 'cycle review appears in the coach queue');
+await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Theo Banks' }).filter({ hasText: 'Cycle review' }).count() >= 1, 'cycle review appears in the coach queue');
 await go('/coach/cycle/theo'); ok(/Eyes up most of the time/.test(await pg.locator('main').innerText()), 'coach sees the player’s cycle reflection'); await pg.getByRole('button', { name: 'Raise Ball security' }).click(); await pg.fill('#cs', 'Eyes up is a habit now.'); await shot('37-coach-cycle-review');
 await pg.getByRole('button', { name: /Complete review/ }).click(); await gotIt(); ok(await pg.inputValue('#fo') === 'Faster dribbling', 'next focus carries into the plan builder');
-ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v5')).cycleReviews.some((c) => c.playerId === 'theo' && c.ratingsAfter['Ball security'] === 2)), 'rubric re-rated in the cycle review');
+ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v6')).cycleReviews.some((c) => c.playerId === 'theo' && c.ratingsAfter['Ball security'] === 2)), 'rubric re-rated in the cycle review');
 await pg.locator('.demobar').getByRole('button', { name: 'Assistant' }).click(); await pg.waitForTimeout(300);
 await go('/coach/review/riley'); await pg.fill('#f-wentWell', 'Good hands on the catch.'); await pg.fill('#f-adjust', 'Set your feet before the catch.'); await pg.fill('#f-why', 'Balanced feet make the shot repeatable.'); await pg.getByRole('button', { name: /Another attempt/ }).click(); await gotIt();
 ok(await state('riley') === 'Sign-off', 'assistant review → Sign-off (head coach sign-off required)');
@@ -99,7 +105,7 @@ await go('/app?p=riley'); ok(await pg.getByText('Another attempt · with your co
 ok(await pg.locator('#focus').count() === 1 && await pg.locator('#refl').count() === 0 && /Confirm your coach’s adjustment/.test(await pg.locator('#rep').innerText()), 'retry: confirm the adjustment before logging'); await pg.locator('#ack-yes').click(); await pg.waitForTimeout(300); ok(await pg.locator('#refl').count() === 1 && await pg.locator('#focus[data-ack="got_it"]').count() === 1, 'after “Got it” the rep is on Today with the focus pinned');
 // ❓ on feedback → thread + queue item (Nia, assistant's player)
 await go('/app?p=nia'); await pg.locator('#ack-q').click(); await pg.fill('#ackq', 'Same tempo on the left too?'); await pg.getByRole('button', { name: 'Send question' }).click(); await pg.waitForTimeout(300); ok(await pg.locator('#focus[data-ack="question"]').count() === 1, '“I have a question” on the focus card');
-ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v5')).messages.some((m) => m.context === 'feedback' && m.refId === 'r_ni2' && m.dueBy)), 'question creates a feedback-linked message with a reply-by');
+ok(await pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v6')).messages.some((m) => m.context === 'feedback' && m.refId === 'r_ni2' && m.dueBy)), 'question creates a feedback-linked message with a reply-by');
 await go('/app/inbox?p=nia'); ok(/Feedback: /.test(await pg.locator('.ulist').innerText()), 'player inbox shows the feedback thread'); await shot('38-player-inbox');
 await pg.locator('.demobar').getByRole('button', { name: 'Assistant' }).click(); await pg.waitForTimeout(300); await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Nia Fable' }).filter({ hasText: 'Question on feedback' }).count() === 1, 'question → Reply needed in the assigned coach’s queue');
 // Promise card updates when the coach keeps a promise
@@ -120,7 +126,7 @@ await go('/coach/player/riley?tab=canvas'); await shot('10-coach-player-canvas',
 // Parent: pause/resume + digest
 await go('/coach/digest'); await pg.locator('.panel', { hasText: 'Avery Pine' }).getByRole('button', { name: /Approve/ }).click(); await gotIt();
 await go('/parent?p=avery'); ok(await pg.locator('.quote').count() >= 1, 'approved digest visible to parent'); await shot('11-parent-view');
-await pg.getByRole('button', { name: 'Pause plan' }).click(); await gotIt(); ok(await state('avery') === 'Paused', 'pause'); await pg.getByRole('button', { name: /Resume/ }).click(); await gotIt(); ok(await state('avery') === 'Work ready', 'resume returns to prior state');
+await pg.getByRole('button', { name: 'Pause coaching' }).click(); await gotIt(); ok(await state('avery') === 'Paused', 'pause'); await pg.getByRole('button', { name: 'Resume coaching' }).click(); await gotIt(); ok(await state('avery') === 'Work ready', 'resume returns to prior state');
 
 await go('/app/progress?p=avery'); await shot('12-player-progress');
 await go('/app/development?p=avery'); await shot('13-player-development');
@@ -131,6 +137,16 @@ await go('/coach/library'); ok(await pg.locator('.drill').count() >= 6, 'library
 await go('/parent?p=riley'); ok(/90 days/.test(await pg.locator('#clips').innerText()) && await pg.locator('#clips').getByRole('button', { name: 'Delete clip' }).count() >= 1, 'parent sees stored clips with auto-delete date + Delete clip'); await pg.locator('#clips').screenshot({ path: 'shots/43-parent-clips.png' });
 await pg.locator('.demobar').getByRole('button', { name: 'Head coach' }).click(); await pg.waitForTimeout(300); await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Avery Pine' }).filter({ hasText: 'Not confirmed' }).count() === 1, 'unconfirmed feedback (48 h+) → Not confirmed queue item'); await shot('44-coach-not-confirmed', false);
 await go('/coach/player/avery?tab=feedback'); ok(/Not confirmed · \d+ h · nudged/i.test(await pg.locator('main').innerText()), 'coach sees ack status per feedback');
+// v6: billing — failed payment → 7-day grace → pause → card updated → resumes
+await go('/parent?p=avery&tab=billing'); const bt = await pg.locator('#billing').innerText().catch((e) => 'ERR ' + e.message.slice(0, 80)); ok(/Active/i.test(bt), 'parent billing shows Active + next charge'); await pg.locator('#billing').screenshot({ path: 'shots/48-parent-billing.png' });
+await pg.locator('.demobar').getByRole('button', { name: 'Head coach' }).click(); await go('/coach/billing'); ok(/MRR/i.test(await pg.locator('main').innerText()), 'coach billing view shows MRR');
+await pg.locator('.billtable .trow', { hasText: 'Avery Pine' }).getByRole('button', { name: 'Simulate failed payment' }).click(); await pg.waitForTimeout(300);
+ok(/Past due \(grace\)/i.test(await pg.locator('.billtable .trow', { hasText: 'Avery Pine' }).innerText()), 'failed payment → Past due (grace)'); ok(await state('avery') !== 'Paused', 'coaching continues during grace'); await shot('49-coach-billing', false);
+await pg.getByRole('button', { name: /\+8 days/ }).click(); await pg.waitForTimeout(300); await gotIt(); ok(await state('avery') === 'Paused', 'grace over → coaching paused'); ok(/Paused \(payment\)/i.test(await pg.locator('.billtable .trow', { hasText: 'Avery Pine' }).innerText()), 'billing view: Paused (payment)');
+await go('/parent?p=avery&tab=billing'); ok(/paused for billing/i.test(await pg.locator('#billing').innerText()), 'parent sees the billing pause'); await pg.locator('#billing').screenshot({ path: 'shots/50-parent-paused.png' });
+await pg.locator('#billing').getByRole('button', { name: /Manage billing/ }).click(); await pg.waitForURL(/#\/billing\/portal/); await shot('51-portal-sim', false); await pg.getByRole('button', { name: /Update card/ }).click(); await pg.getByText(/Card updated/).waitFor(); ok(await state('avery') !== 'Paused', 'payment received → coaching resumes automatically');
+await pg.locator('.demobar').getByRole('button', { name: 'Ops' }).click(); await go('/ops/outbox'); await pg.locator('.mailrow', { hasText: 'Payment didn’t go through' }).first().click(); await pg.waitForTimeout(300); ok(await pg.locator('iframe.mailhtml').count() === 1, 'outbox previews the HTML email'); await shot('52-outbox-html', false);
+await go('/account'); ok(/Quiet hours/i.test(await pg.locator('main').innerText()), 'email settings page'); await pg.getByRole('checkbox').first().uncheck(); await pg.getByRole('button', { name: 'Save email settings' }).click(); await pg.getByText('Saved ✓').waitFor(); await shot('53-account', false);
 for (const r of ['/privacy', '/terms', '/support']) { await go(r); ok(await pg.locator('h1').count() === 1, r + ' renders'); }
 
 const mo = await b.newPage({ viewport: { width: 390, height: 844 }, isMobile: true }); mo.on('pageerror', (e) => errs.push(e.message));

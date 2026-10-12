@@ -11,10 +11,12 @@ const PLANS = [
 const FAQ = [
   ['Is this in person?', 'No. Players train on their own court or driveway, log the work in the app, and get written feedback. Live video calls are included on Development and Inner Circle.'],
   ['What ages?', 'Players 10–16 who can practice on their own 2+ days a week. Younger players are welcome if a parent helps them log.'],
-  ['Why only 15 players?', 'Your coach reviews your check-ins personally, and the head coach checks any review an assistant writes. Past 15, replies slow down and plans stop being personal, so we cap it and keep a waitlist. The app enforces the cap.'],
+  ['Why only 15 players?', 'Your coach reviews your check-ins personally, and the head coach checks any review an assistant writes. Past 15, replies slow down and plans stop being personal, so we cap it and keep a waitlist. The app enforces the cap. When a spot opens, the longest-waiting family gets an email with a link held for 48 hours.'],
   ['What happens if the coach is late?', 'Every submission has a reply-by time based on your plan. If it passes, it jumps to the top of the coach’s queue marked overdue, and you can see the deadline on your Today screen.'],
   ['Do you review game film?', 'Not full game film. With a check-in, players can send one short practice clip (up to 30 seconds), and the coach answers with written feedback and time-stamped notes. Clips count toward your plan’s weekly reviews. Full film breakdown isn’t offered.'],
-  ['Contracts?', 'None. Month to month. Pause anytime from the parent view and pick up exactly where you left off.'],
+  ['Contracts?', 'None. Month to month, billed in advance through Stripe. Pause coaching anytime from the parent view and pick up exactly where you left off (pausing doesn’t stop billing).'],
+  ['How do I cancel?', 'Parent view → Billing → Manage billing (Stripe’s secure portal). Coaching continues to the end of the month you paid for. No fees, no partial-month refunds.'],
+  ['What if a payment fails?', 'Stripe retries and we email you. Coaching keeps going for 7 days while you update the card; after that it pauses, with progress saved, until the payment goes through.'],
 ];
 const LOOP = [
   { k: 'Focus', t: 'Weak-hand control under pressure', who: 'Coach sets it', x: 70, y: 210 },
@@ -88,7 +90,7 @@ export default function Home() {
 
         <section className="paper" id="plans"><div className="wrap">
           <p className="kicker">Plans</p><h2 className="display">Priced by coach time. Honest limits.</h2>
-          <p className="muted">One coach and 15 players in total, so every reviewed rep gets a personal reply. When the roster is full, new families go on the waitlist automatically.</p>
+          <p className="muted">One coach and 15 players in total, so every reviewed rep gets a personal reply. When the roster is full, new families go on the waitlist automatically. Pay monthly by card through Stripe; cancel anytime.</p>
           <div className="tiers">{PLANS.map((t) => (
             <article key={t.name} className={`tier ${t.featured ? 'feat' : ''}`}>
               <span className="kicker">{t.tag}</span><h3 className="display">{t.name}</h3>

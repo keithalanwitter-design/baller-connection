@@ -31,7 +31,7 @@ describe('personalization', () => {
   it('onboarding answers (frustration, proud of) are stored and used in the welcome', () => {
     let s = run(seed(), { id: 'public', role: 'public' }, { type: 'submitApplication', playerName: 'Kai Rook', parentName: 'Lou Rook', email: 'lou@x.test', answers: { age: '13–14', days: '3–4 days', need: 'Plan + regular feedback', goal: 'x' }, next: 'apply' }); const kai = s.players.at(-1)!.id;
     const r = dispatch(s, { type: 'createInvite', playerId: kai }, OPS); s = r.snapshot; s = dispatch(s, { type: 'acceptInvite', code: r.created!.inviteCode, userId: 'u_lou' }, { id: 'public', role: 'public' }).snapshot;
-    const LOU: Actor = { id: 'u_lou', role: 'parent', familyId: P(s, kai).familyId };
+    const LOU: Actor = { id: 'u_lou', role: 'parent', familyId: P(s, kai).familyId }; s = dispatch(s, { type: 'billingEvent', eventId: 'evt_v4', kind: 'checkout_completed', playerId: kai }, { id: 'system', role: 'system' }).snapshot;
     s = run(s, LOU, { type: 'recordConsent', playerId: kai, guardianName: 'Lou Rook', agreed: true }, { type: 'completeOnboarding', playerId: kai, position: 'Guard', goal: 'Start for my school team', learnStyle: 'Explain the why', rhythm: '3 days', frustration: 'Missing free throws late', proudOf: 'My defense' });
     expect(P(s, kai).frustration).toBe('Missing free throws late'); expect(s.messages.at(-1)!.text).toMatch(/proud of My defense/);
   });

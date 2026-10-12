@@ -140,6 +140,7 @@ export function UserMenu({ dark }: { dark?: boolean }) {
   return <div className={`usermenu ${dark ? 'dark' : ''}`}>
     <Link to={inboxPath(as.role)} className="bell" aria-label={`Notifications: ${unread} unread`}>🔔{unread > 0 && <b>{unread}</b>}</Link>
     <span className="small"><b>{as.name}</b><span className="block dim">{ROLE_LABEL[as.role]}{mode === 'demo' ? ' · demo' : ''}</span></span>
+    <Link to="/account" className="link small light" aria-label="Email & sign-in settings">Settings</Link>
     {mode === 'live' && <button className="link small light" onClick={async () => { await signOut(); nav('/login'); }}>Sign out</button>}
   </div>;
 }

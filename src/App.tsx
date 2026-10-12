@@ -14,6 +14,7 @@ import Parent from './pages/Parent';
 import { CoachShell } from './pages/Coach';
 import SystemLog from './pages/Log';
 import { Legal } from './pages/Legal';
+import { AccountPage, CheckoutSim, MagicVerify, PortalSim } from './v6';
 
 export function Logo({ light }: { light?: boolean }) {
   return <Link to="/" className={`logo ${light ? 'light' : ''}`} aria-label="Baller Connection home"><svg viewBox="0 0 32 32" width="28" height="28" aria-hidden><circle cx="16" cy="16" r="14" fill="#FF5E1A" /><path d="M2 16h28M16 2v28M6 6c6 5 6 15 0 20M26 6c-6 5-6 15 0 20" stroke="#0A1430" strokeWidth="2" fill="none" /></svg><span>BALLER<b>CONNECTION</b></span></Link>;
@@ -25,10 +26,10 @@ function DemoBar() {
   // The route decides the persona; the coach area remembers head vs assistant.
   useEffect(() => {
     const coachFlavor = (localStorage.getItem('bc-demo-coach') as UserRole) || 'head';
-    const want: UserRole | null = p.startsWith('/coach') ? coachFlavor : p.startsWith('/ops') ? 'ops' : p.startsWith('/app') ? 'player' : /^\/(parent|welcome|invite|inbox)/.test(p) ? 'parent' : null;
+    const want: UserRole | null = p.startsWith('/coach') ? coachFlavor : p.startsWith('/ops') ? 'ops' : p.startsWith('/app') ? 'player' : /^\/(parent|welcome|invite|inbox|checkout|billing)/.test(p) ? 'parent' : null;
     if (want && want !== as?.role && !(p.startsWith('/inbox') && as?.role === 'player')) setDemoRole(want);
   }, [p]); // eslint-disable-line react-hooks/exhaustive-deps
-  const visitor = !/^\/(app|parent|coach|ops|welcome|invite|inbox|log)/.test(p);
+  const visitor = !/^\/(app|parent|coach|ops|welcome|invite|inbox|log|checkout|billing|account)/.test(p);
   return (
     <div className="demobar" role="region" aria-label="Demo controls">
       <span className="demotag"><i className="dot local" /> Demo · fictional data · in-browser engine</span>
@@ -91,7 +92,8 @@ export default function App() {
       {mode === 'demo' && <DemoBar />}<ErrorBar />
       {!s || !ready ? <main id="main" className="loading">{error ? <><p>Couldn’t reach the server. Check your connection, then try again.</p><button className="btn" onClick={() => refresh()}>Try again</button></> : 'Loading…'}</main> : (
         <Routes>
-          <Route path="/" element={<Home />} /><Route path="/how" element={<How />} /><Route path="/apply" element={<Apply />} /><Route path="/login" element={<Login />} /><Route path="/forgot" element={<Forgot />} /><Route path="/reset" element={<Reset />} /><Route path="/invite" element={<Invite />} />
+          <Route path="/" element={<Home />} /><Route path="/how" element={<How />} /><Route path="/apply" element={<Apply />} /><Route path="/login" element={<Login />} /><Route path="/forgot" element={<Forgot />} /><Route path="/reset" element={<Reset />} /><Route path="/invite" element={<Invite />} /><Route path="/magic" element={<MagicVerify />} />
+          <Route path="/checkout" element={<Need roles={['parent']}><CheckoutSim /></Need>} /><Route path="/billing/portal" element={<Need roles={['parent']}><PortalSim /></Need>} /><Route path="/account" element={<Need roles={['head', 'assistant', 'ops', 'parent', 'player']}><AccountPage /></Need>} />
           <Route path="/welcome" element={<Need roles={['parent']}><Welcome /></Need>} /><Route path="/inbox" element={<Need roles={['parent', 'player']}><FamilyInbox /></Need>} />
           <Route path="/app/*" element={<Need roles={['player', 'parent']}><PlayerShell /></Need>} /><Route path="/parent" element={<Need roles={['parent']}><Parent /></Need>} />
           <Route path="/coach/*" element={<Need roles={['head', 'assistant']}><CoachShell /></Need>} /><Route path="/ops/*" element={<Need roles={['ops', 'head']}><CoachShell ops /></Need>} />

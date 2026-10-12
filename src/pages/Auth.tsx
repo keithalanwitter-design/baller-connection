@@ -6,6 +6,7 @@ import { useSnap, useStore } from '../store';
 import { TIER_INFO } from '../../shared/domain';
 import { shortWhen } from '../../shared/time';
 import { family, first, tierReply } from '../../shared/workflow';
+import { MagicLinkForm } from '../v6';
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const homeFor = (r?: string | null) => (r === 'head' || r === 'assistant' ? '/coach' : r === 'ops' ? '/ops' : r === 'parent' ? '/parent' : '/app');
@@ -22,6 +23,7 @@ export function Login() {
       {error && <p className="errtext" role="alert">{error}</p>}
       <button className="btn lg" disabled={busy || !login || !secret}>Sign in</button>
     </form>
+    {kind === 'email' && <details className="magicbox" open={sp.get('magic') === '1'}><summary>Or get a one-time sign-in link by email</summary><MagicLinkForm initial={login.includes('@') ? login : ''} /></details>}
     <p className="small dim">{kind === 'email' ? <><Link to="/forgot">First time or forgot password?</Link> · Got an invite? <Link to="/invite">Enter your code</Link></> : 'Players under 13 don’t use email. Your parent sets your username and PIN in their account.'}</p>
   </AuthFrame>;
 }
@@ -52,10 +54,10 @@ export function Invite() {
       {!token && <><label htmlFor="ic">6-digit invite code from your email</label><input id="ic" className="input" inputMode="numeric" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />{mode === 'demo' && <p className="note">Demo: Theo Banks’ code is <b>246810</b>.</p>}</>}
       <label htmlFor="ipn">Your name (parent or guardian)</label><input id="ipn" className="input" value={f.parentName} onChange={(e) => setF({ ...f, parentName: e.target.value })} />
       <label htmlFor="ie">Email</label><input id="ie" className="input" type="email" autoComplete="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
-      {mode === 'live' && <><label htmlFor="ipw">Create a password (8+ characters)</label><input id="ipw" className="input" type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></>}
+      {mode === 'live' && <><label htmlFor="ipw">Create a password (optional: 8+ characters, or leave empty and sign in with emailed links)</label><input id="ipw" className="input" type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></>}
       {err && <p className="errtext" role="alert">{err}</p>}
-      <button className="btn lg" disabled={busy || (!token && f.code.length < 6) || !f.parentName.trim() || !f.email.includes('@') || f.password.length < 8}>Accept invite & create account</button>
-      <p className="small dim">Next: player profile, goal, rhythm and parental consent (about 2 minutes). No payment is taken in the app.</p>
+      <button className="btn lg" disabled={busy || (!token && f.code.length < 6) || !f.parentName.trim() || !f.email.includes('@') || (f.password.length > 0 && f.password.length < 8)}>Accept invite & create account</button>
+      <p className="small dim">Next: choose the plan and pay securely with Stripe (cancel anytime), then a 2-minute setup: profile, goal, rhythm and parental consent.</p>
     </form></AuthFrame>;
 }
 function AuthFrame({ title, children }: { title: string; children: React.ReactNode }) {

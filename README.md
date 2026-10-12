@@ -101,4 +101,4 @@ Local demo accounts (seeded only when `SEED=demo`): `head@demo.test`, `assistant
 | Development | $139/mo | 1 business day | + up to 3 reviews/week, plan adjusted every 2 weeks, monthly 20-min video check-in |
 | Inner Circle | $229/mo (cap in settings) | Same business day | + weekly 30-min live session, review on every submission, pre-tournament plan |
 
-Reply windows and caps can be edited in Settings. Billing status is tracked by hand (unpaid/paid/comp) until Stripe is connected.
+Reply windows and caps can be edited in Settings. Billing runs through Stripe Checkout and the Customer Portal (v6); without keys the app simulates checkout in test mode. Sign-in supports magic links, passwords and the under-13 PIN. Email goes through the log provider by default, or Resend/Postmark. See DEPLOY.md.

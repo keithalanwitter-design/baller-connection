@@ -18,7 +18,7 @@ export async function openDb(file?: string): Promise<Db & { raw: Database }> {
   const stmt = (sql: string, args: unknown[] = []): Stmt => ({
     bind: (...v) => stmt(sql, v),
     all: async <T,>() => { const st = raw.prepare(sql); st.bind(args as never); const results: T[] = []; while (st.step()) results.push(st.getAsObject() as T); st.free(); return { results }; },
-    first: async <T,>() => { const st = raw.prepare(sql); st.bind(args as never); const r = st.step() ? (st.getAsObject() as T) : null; st.free(); return r; },
+    first: async <T,>() => { const st = raw.prepare(sql); st.bind(args as never); const r = st.step() ? (st.getAsObject() as T) : null; st.free(); if (/^\s*(UPDATE|INSERT|DELETE)/i.test(sql)) persist(); return r; },
     run: async () => { raw.run(sql, args as never); persist(); return {}; },
   });
   return {

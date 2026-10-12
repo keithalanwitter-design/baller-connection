@@ -1,4 +1,4 @@
-// Baller Connection domain model (v5). Shared by the browser demo engine, the API server and tests.
+// Baller Connection domain model (v6). Shared by the browser demo engine, the API server and tests.
 export type Tier = 'Foundation' | 'Development' | 'Inner Circle';
 /** Account roles. `system` is the cron/scheduler. */
 export type UserRole = 'head' | 'assistant' | 'ops' | 'parent' | 'player';
@@ -13,7 +13,8 @@ export const LIFECYCLE = [
   'Work ready', 'Submitted', 'Feedback due', 'Sign-off', 'Next step ready', 'Cycle review', 'Paused',
 ] as const;
 export type LifecycleState = (typeof LIFECYCLE)[number];
-export type Billing = 'unpaid' | 'paid' | 'comp';
+/** unpaid → paid (Stripe active) → past_due (grace) → canceled (access ended). comp = complimentary (no Stripe). */
+export type Billing = 'unpaid' | 'paid' | 'comp' | 'past_due' | 'canceled';
 
 export interface Settings {
   programName: string; accent: string; availability: string;
@@ -22,8 +23,15 @@ export interface Settings {
   /** Written reviews per week by tier (99 = every submission). */ reviewsPerWeek: Record<Tier, number>;
   /** Office hours (local): days 0=Sun..6=Sat, hours 0-23. Outside them the coach's alerts are held and families see "replies resume …". */ officeHours: { days: number[]; start: number; end: number };
   urgentReplyHours: number; savedReplies: string[]; cycleWeeks: number;
+  /** v6: families pay before onboarding finishes (comp players skip). */ requirePayment?: boolean;
+  /** v6: days of coaching after a failed payment before the player is paused. */ graceDays?: number;
+  /** v6: hours a waitlisted family has to claim an open spot. */ offerHours?: number;
+  /** v6: IANA zone for quiet hours and email times. */ timezone?: string;
 }
-export interface User { id: string; name: string; email?: string | null; username?: string | null; role: UserRole; familyId?: string | null; playerId?: string | null; active: boolean }
+/** v6 per-user email preferences. Essential mail (sign-in links, invites, consent, payments, spot offers) always sends. */
+export interface EmailPrefs { coaching: boolean; digest: boolean; updates: boolean; /** local hour quiet time starts (0–23); equal start/end = off */ quietStart: number; quietEnd: number }
+export const DEFAULT_PREFS: EmailPrefs = { coaching: true, digest: true, updates: true, quietStart: 21, quietEnd: 7 };
+export interface User { id: string; name: string; email?: string | null; username?: string | null; role: UserRole; familyId?: string | null; playerId?: string | null; active: boolean; prefs?: EmailPrefs | null }
 export interface Family { id: string; parentName: string; email: string; deletedAt?: string | null }
 export interface Player {
   id: string; familyId: string; name: string; age: number; position: string; tier: Tier;
@@ -35,7 +43,7 @@ export interface Player {
   /** “What I’m working on”: one sentence in the player’s words, renewed weekly. */ workingOn?: string | null; workingOnWeek?: string | null;
 }
 export interface Application { id: string; at: string; playerId: string; answers: Record<string, string>; tier: Tier; fit: 'fit' | 'waitlist' | 'notyet'; next: 'apply' | 'call' | 'waitlist' }
-export interface Invite { id: string; playerId: string; email: string; /** sha256 of the link token; plaintext only ever appears in the sent email */ tokenHash: string; codeHash: string; sentAt: string; expiresAt: string; createdBy: string; acceptedAt?: string | null; acceptedBy?: string | null; status: 'pending' | 'accepted' | 'expired' | 'revoked' }
+export interface Invite { id: string; playerId: string; email: string; /** sha256 of the link token; plaintext only ever appears in the sent email */ tokenHash: string; codeHash: string; sentAt: string; expiresAt: string; createdBy: string; acceptedAt?: string | null; acceptedBy?: string | null; status: 'pending' | 'accepted' | 'expired' | 'revoked'; /** v6: 'offer' = a waitlist spot offer with a short expiry */ kind?: 'invite' | 'offer' | null }
 export interface Consent { id: string; playerId: string; guardianName: string; userId: string; version: string; text: string; at: string }
 export interface Cycle { id: string; playerId: string; index: number; focus: string; startAt: string; endAt: string; status: 'active' | 'review' | 'closed'; templateId?: string | null; /** last mid-cycle plan adjustment (promise: plan adjusted every 2 weeks) */ adjustedAt?: string | null }
 export interface Drill { id: string; title: string; reps: number; minutes: number; cues: string[]; tags: string[]; createdBy: string; archived: boolean; /** Coach’s reusable feedback starter for this drill. */ fbTemplate?: { wentWell: string; adjust: string; why: string } | null }
@@ -56,9 +64,16 @@ export interface Habit { id: string; playerId: string; date: string; key: string
 export interface Milestone { id: string; playerId: string; key: string; at: string }
 export interface Digest { id: string; playerId: string; week: string; text: string; status: 'draft' | 'approved'; approvedAt?: string | null; approvedBy?: string | null }
 export interface Meeting { id: string; playerId?: string | null; staffId: string; at: string; minutes: number; kind: 'check-in' | 'live' | 'fit-call' | 'goal-review'; note: string; status: 'scheduled' | 'done' | 'cancelled' }
-export type NotificationType = 'promise_risk' | 'rhythm' | 'question' | 'reply_due_soon' | 'overdue' | 'new_submission' | 'feedback_ready' | 'invite_accepted' | 'plan_published' | 'cycle_review' | 'signoff_needed' | 'new_application' | 'invite_expired' | 'new_message' | 'digest_ready';
+export type NotificationType = 'promise_risk' | 'rhythm' | 'question' | 'reply_due_soon' | 'overdue' | 'new_submission' | 'feedback_ready' | 'invite_accepted' | 'plan_published' | 'cycle_review' | 'signoff_needed' | 'new_application' | 'invite_expired' | 'new_message' | 'digest_ready' | 'billing';
 export interface Notification { id: string; userId: string; type: NotificationType; text: string; playerId?: string | null; link: string; at: string; readAt?: string | null; emailedAt?: string | null; dedupe: string }
-export interface OutboxEmail { id: string; to: string; subject: string; body: string; at: string; status: 'queued' | 'sent' | 'logged' | 'failed'; kind: string }
+/** Outbox row: text + HTML, category for preferences, retry bookkeeping. dead = gave up after 5 attempts (dead-letter list). */
+export interface OutboxEmail { id: string; to: string; subject: string; body: string; at: string; status: 'queued' | 'sent' | 'logged' | 'failed' | 'dead'; kind: string; html?: string | null; category?: EmailCategory | null; userId?: string | null; attempts?: number | null; sendAfter?: string | null; lastError?: string | null }
+export type EmailCategory = 'essential' | 'coaching' | 'digest' | 'updates';
+/** v6 Stripe-backed subscription, one per player. Stripe is the source of truth; webhooks update this row. */
+export interface Subscription { id: string; playerId: string; familyId: string; tier: Tier; status: 'incomplete' | 'active' | 'past_due' | 'canceled' | 'paused'; customerId?: string | null; subscriptionId?: string | null; currentPeriodEnd?: string | null; cancelAtPeriodEnd?: boolean; pastDueSince?: string | null; /** coaching paused by billing (grace ran out / canceled / paused in portal) */ pausedByBilling?: boolean; startedAt: string; updatedAt: string }
+/** Processed webhook event ids (idempotency). */
+export interface BillingEvent { id: string; kind: string; at: string; playerId?: string | null }
+export type BillingEventKind = 'checkout_completed' | 'subscription_updated' | 'subscription_deleted' | 'invoice_paid' | 'invoice_failed';
 export interface DataRequest { id: string; playerId: string; familyId: string; kind: 'export' | 'delete'; requestedBy: string; at: string; status: 'open' | 'done'; doneAt?: string | null }
 export interface Reflection { id: string; playerId: string; week: string; text: string; feel: number; at: string }
 export interface CycleReview { id: string; cycleId: string; playerId: string; improved?: string | null; hardest?: string | null; wantNext?: string | null; playerAt?: string | null; summary?: string | null; ratingsBefore?: Record<string, number> | null; ratingsAfter?: Record<string, number> | null; nextFocus?: string | null; coachAt?: string | null }
@@ -69,9 +84,9 @@ export interface Snapshot {
   users: User[]; families: Family[]; players: Player[]; applications: Application[]; invites: Invite[]; consents: Consent[];
   cycles: Cycle[]; drills: Drill[]; templates: Template[]; assignments: Assignment[]; submissions: Submission[]; reviews: Review[];
   messages: Message[]; habits: Habit[]; milestones: Milestone[]; digests: Digest[]; meetings: Meeting[];
-  notifications: Notification[]; outbox: OutboxEmail[]; dataRequests: DataRequest[]; reflections: Reflection[]; cycleReviews: CycleReview[]; clips: Clip[]; events: DomainEvent[];
+  notifications: Notification[]; outbox: OutboxEmail[]; dataRequests: DataRequest[]; reflections: Reflection[]; cycleReviews: CycleReview[]; clips: Clip[]; subscriptions: Subscription[]; billingEvents: BillingEvent[]; events: DomainEvent[];
 }
-export const TABLES = ['users', 'families', 'players', 'applications', 'invites', 'consents', 'cycles', 'drills', 'templates', 'assignments', 'submissions', 'reviews', 'messages', 'habits', 'milestones', 'digests', 'meetings', 'notifications', 'outbox', 'dataRequests', 'reflections', 'cycleReviews', 'clips', 'events'] as const;
+export const TABLES = ['users', 'families', 'players', 'applications', 'invites', 'consents', 'cycles', 'drills', 'templates', 'assignments', 'submissions', 'reviews', 'messages', 'habits', 'milestones', 'digests', 'meetings', 'notifications', 'outbox', 'dataRequests', 'reflections', 'cycleReviews', 'clips', 'subscriptions', 'billingEvents', 'events'] as const;
 export type TableName = (typeof TABLES)[number];
 
 export const TIER_INFO: Record<Tier, { price: number; reviewsPerWeek: string }> = {
@@ -136,13 +151,18 @@ export type Command =
   | { type: 'requestData'; playerId: string; kind: DataRequest['kind'] }
   | { type: 'completeDataRequest'; requestId: string }
   | { type: 'inviteStaff'; name: string; email: string; role: 'assistant' | 'ops'; userId?: string }
+  /** v6, server/system only: a verified Stripe webhook (or the test-mode simulator) translated into one engine command. Idempotent by eventId. */
+  | { type: 'billingEvent'; eventId: string; kind: BillingEventKind; playerId?: string | null; customerId?: string | null; subscriptionId?: string | null; tier?: Tier | null; status?: string | null; periodEnd?: string | null; cancelAtPeriodEnd?: boolean; paused?: boolean; amount?: number | null }
+  | { type: 'joinWaitlist'; playerId: string }
+  | { type: 'setEmailPrefs'; prefs: Partial<EmailPrefs>; userId?: string }
   | { type: 'sweep' }
   | { type: 'generateDigests' }
   | { type: 'advanceClock'; hours: number };
 export type CommandType = Command['type'];
 
 /** v4 settings defaults (merged over stored settings so older databases pick them up). */
-export const SETTINGS_DEFAULTS: Pick<Settings, 'reviewsPerWeek' | 'officeHours' | 'urgentReplyHours' | 'savedReplies' | 'cycleWeeks'> = {
+export const SETTINGS_DEFAULTS: Pick<Settings, 'reviewsPerWeek' | 'officeHours' | 'urgentReplyHours' | 'savedReplies' | 'cycleWeeks' | 'requirePayment' | 'graceDays' | 'offerHours' | 'timezone'> = {
+  requirePayment: true, graceDays: 7, offerHours: 48, timezone: 'America/Chicago',
   reviewsPerWeek: { Foundation: 1, Development: 3, 'Inner Circle': 99 }, officeHours: { days: [1, 2, 3, 4, 5, 6], start: 9, end: 20 }, urgentReplyHours: 4, cycleWeeks: 4,
   savedReplies: ['Great question. Short answer: yes, same reps, same tempo.', 'Thanks for the heads-up. Lighten the day before a game: habits only.', 'Let’s cover this on your next session. I’ve added it to my notes.'],
 };

@@ -1,4 +1,4 @@
-# Baller Connection v5: Worker API + static app + D1 + cron. See DEPLOY.md.
+# Baller Connection v6: Worker API + static app + D1 + cron. See DEPLOY.md.
 name = "baller-connection"
 main = "server/worker.ts"
 compatibility_date = "2026-10-01"
@@ -12,10 +12,19 @@ run_worker_first = ["/api/*"]
 
 [vars]
 APP_URL = "https://baller-connection.YOUR-SUBDOMAIN.workers.dev"
-EMAIL_PROVIDER = "log"          # log | resend | postmark
-EMAIL_FROM = "Baller Connection <coach@YOUR-DOMAIN>"
+EMAIL_PROVIDER = "log"          # log (default: nothing leaves the server) | resend | postmark
+EMAIL_FROM = "Baller Connection <coach@YOUR-DOMAIN>"   # must be on a domain verified with the provider (SPF + DKIM, see DEPLOY.md)
 DEMO = "0"
-# Secrets (never in this file): wrangler secret put SESSION_SECRET / EMAIL_API_KEY
+# v6 Stripe price ids (test mode). Create them with: STRIPE_SECRET_KEY=sk_test_... npm run stripe:setup
+STRIPE_PRICE_FOUNDATION = ""
+STRIPE_PRICE_DEVELOPMENT = ""
+STRIPE_PRICE_INNER_CIRCLE = ""
+# Secrets (never in this file):
+#   wrangler secret put SESSION_SECRET
+#   wrangler secret put RESEND_API_KEY        (or POSTMARK_SERVER_TOKEN)
+#   wrangler secret put STRIPE_SECRET_KEY     (sk_test_… ; live keys are refused unless STRIPE_ALLOW_LIVE = "1")
+#   wrangler secret put STRIPE_WEBHOOK_SECRET (whsec_… from the webhook endpoint)
+# With no STRIPE_SECRET_KEY the app runs the built-in billing simulator (signed test events, no Stripe calls).
 
 [[d1_databases]]
 binding = "DB"

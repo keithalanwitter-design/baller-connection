@@ -23,6 +23,7 @@ export const COMMAND_ROLES: Record<CommandType, Role[]> = {
   reactFeedback: FAMILY, weeklyReflection: FAMILY, updateAboutMe: FAMILY, cycleReflection: FAMILY, setTournament: ['parent', 'player', 'head', 'assistant'],
   completeCycleReview: COACH, adjustPlan: COACH, approveDigests: COACH,
   registerClip: FAMILY, deleteClip: ['parent', 'player', 'head', 'assistant'], setWorkingOn: FAMILY, saveDrillFeedback: COACH,
+  billingEvent: ['system'], joinWaitlist: ['parent', 'head', 'ops'], setEmailPrefs: ['head', 'assistant', 'ops', 'parent', 'player', 'system'],
   sweep: ['system'], generateDigests: ['system', 'head'], advanceClock: ['system'],
 };
 /** Commands an assistant may only run on players assigned to them. */
@@ -67,14 +68,16 @@ export function scopeSnapshot(s: Snapshot, a: Actor): Snapshot {
     notifications: s.notifications.filter((n) => n.userId === a.id),
     outbox: a.role === 'ops' ? s.outbox : [],
     dataRequests: a.role === 'ops' ? s.dataRequests : by(s.dataRequests),
+    subscriptions: a.role === 'ops' ? s.subscriptions ?? [] : family ? by(s.subscriptions ?? []) : [], billingEvents: [],
     events: s.events.filter((e) => (a.role === 'ops' ? true : !!e.playerId && ids.has(e.playerId))).map((e) => (family && e.type === 'rubric' ? { ...e, detail: 'Rubric updated' } : e)),
   };
 }
 
 /** HTTP endpoint matrix. Enforced by server/app.ts and exercised by tests/permissions.test.ts. */
-export type Endpoint = 'snapshot' | 'commands' | 'export' | 'outbox' | 'team' | 'audit' | 'calendar' | 'notifications' | 'staff' | 'clips';
+export type Endpoint = 'snapshot' | 'commands' | 'export' | 'outbox' | 'team' | 'audit' | 'calendar' | 'notifications' | 'staff' | 'clips' | 'billing' | 'account';
 export const ENDPOINT_ROLES: Record<Endpoint, UserRole[]> = {
   snapshot: ['head', 'assistant', 'ops', 'parent', 'player'], commands: ['head', 'assistant', 'ops', 'parent', 'player'],
   export: ['head', 'ops', 'parent'], outbox: ['head', 'ops'], team: ['head', 'ops'], audit: ['head', 'ops'],
   calendar: ['head', 'assistant', 'ops', 'parent', 'player'], notifications: ['head', 'assistant', 'ops', 'parent', 'player'], staff: ['head'], clips: ['head', 'assistant', 'parent', 'player'],
+  /** v6: checkout / portal (parent), billing overview + test-mode simulator (head, ops) */ billing: ['head', 'ops', 'parent'], account: ['head', 'assistant', 'ops', 'parent', 'player'],
 };

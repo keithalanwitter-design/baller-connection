@@ -5,15 +5,21 @@ import { DEMO_PASSWORD, DEMO_PIN, seed } from '../shared/seed';
 import { buildOpsQueue, buildQueue, teamLoad, TRANSITIONS } from '../shared/workflow';
 import { COOKIE, hashSecret, hmac, newToken, readToken, sessionCookie, verifySecret } from './auth';
 import type { Db } from './db';
-import { makeProvider } from './email';
+import { makeProvider, ProviderError, type EmailEnv } from './email';
+import { StripeClient, priceId, priceToTier, signStripe, stripeMode, verifyStripe, type StripeEnv } from './stripe';
+import { CATEGORY, MAX_ATTEMPTS, RETRY_BACKOFF_MS, quietUntil, render, wants, type EmailData, type EmailKind } from '../shared/emails';
+import { checkoutBlock, mockPriceToTier, mockStripeEvents, stripeToCommand, subscriptionOf, TIERS, type MockOutcome } from '../shared/billing';
+import type { EmailCategory, Tier } from '../shared/domain';
 import { Repo } from './repo';
 import { playerCsv, calendarIcs } from './export';
 import type { BlobStore } from './blobs';
 import { CLIP_MAX_BYTES, canSeeClip, clipError, normalizeMime, sniffMime, videoDuration } from '../shared/clips';
 
-export interface Env { DB: Db; SESSION_SECRET?: string; EMAIL_PROVIDER?: string; EMAIL_API_KEY?: string; EMAIL_FROM?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string; /** Clip bytes: R2 (Worker) or local disk (Node). Without it, uploads answer 503. */ BLOBS?: BlobStore }
+export interface Env extends EmailEnv, StripeEnv { DB: Db; SESSION_SECRET?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string; /** Clip bytes: R2 (Worker) or local disk (Node). Without it, uploads answer 503. */ BLOBS?: BlobStore }
 class HttpError extends Error { status: number; constructor(status: number, msg: string) { super(msg); this.status = status; } }
 const SYSTEM_ONLY = new Set(['sweep', 'advanceClock']);
+/** Never accepted from a browser: billing state only changes through a verified Stripe webhook (or the test-mode simulator, which signs its events the same way). */
+const WEBHOOK_ONLY = new Set(['billingEvent']);
 /** Commands only the server itself may run (registerClip is issued by POST /api/clips after it has checked the bytes). */
 const SERVER_ONLY = new Set(['registerClip']);
 
@@ -39,17 +45,48 @@ export async function runCommand(env: Env, actor: Actor, cmd: Command) {
 }
 /** Once a real provider has the mail, the outbox copy no longer needs the invite/reset secret. (The Log provider keeps it: it IS the delivery in dev.) */
 export const redactSecrets = (b: string) => b.replace(/token=[A-Za-z0-9_-]+/g, 'token=[sent]').replace(/code \d{6}/g, 'code [sent]');
-export async function deliver(env: Env) {
-  const repo = new Repo(env.DB); const p = makeProvider(env); const app = env.APP_URL ?? '';
-  for (const m of (await repo.queuedEmails()).results) { try { const st = await p.send({ to: m.to, subject: m.subject, body: m.body.replaceAll(' /invite', ` ${app}/#/invite`).replaceAll(' /reset', ` ${app}/#/reset`) }); await repo.markEmail(m.id, st); if (st === 'sent') await repo.setEmailBody(m.id, redactSecrets(m.body)); } catch { await repo.markEmail(m.id, 'failed'); } }
+const secretOf = (env: Env) => env.SESSION_SECRET ?? 'dev-only-secret-change-me';
+const originOf = (app: string) => { try { return new URL(app).origin; } catch { return ''; } };
+/** Signed one-click unsubscribe link for one user + category (RFC 8058 List-Unsubscribe-Post). */
+export async function unsubscribeUrl(env: Env, userId: string, category: string) { return `${originOf(env.APP_URL ?? '')}/api/unsubscribe?u=${encodeURIComponent(userId)}&c=${category}&s=${(await hmac(secretOf(env), `unsub:${userId}:${category}`)).slice(0, 32)}`; }
+/** Server-side mail (magic links, password links, roundups): same templates, preferences and quiet hours as the engine. */
+export async function queueEmail(env: Env, kind: EmailKind, to: string, data: EmailData, userId?: string | null) {
+  const repo = new Repo(env.DB); const prefs = userId ? await repo.userPrefs(userId) : null; const cat = CATEGORY[kind]; if (!wants(prefs, cat)) return false;
+  const r = render(kind, data); await repo.insertEmail({ id: newId('em'), to, subject: r.subject, body: r.text, html: r.html, kind, status: 'queued', category: cat, userId: userId ?? null, sendAfter: quietUntil(new Date(), prefs, cat) }); return true;
 }
+/** Sends due mail. Provider errors retry with backoff (1 m, 5 m, 30 m, 2 h); after 5 attempts, or a permanent 4xx, the row is dead-lettered for staff. */
+export async function deliver(env: Env, f: typeof fetch = fetch) {
+  const repo = new Repo(env.DB); const p = makeProvider(env, f); const app = env.APP_URL ?? ''; const now = Date.now();
+  const fill = (x: string) => x.replaceAll('{{APP}}', app).replaceAll(' /invite', ` ${app}/#/invite`).replaceAll(' /reset', ` ${app}/#/reset`);
+  for (const m of (await repo.dueEmails(new Date(now).toISOString())).results) {
+    const unsub = m.category && m.category !== 'essential' && m.userId ? await unsubscribeUrl(env, m.userId, m.category) : null; const u = (x: string) => x.replaceAll('{{UNSUB}}', unsub ?? `${app}/#/account`);
+    const attempts = (m.attempts ?? 0) + 1;
+    try {
+      const body = u(fill(m.body)); const html = m.html ? u(fill(m.html)) : null;
+      const st = await p.send({ to: m.to, subject: m.subject, body, html, headers: unsub ? { 'List-Unsubscribe': `<${unsub}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } : undefined });
+      // Outbox keeps exactly what went out; once a real provider has it, the secret link/code is redacted from our copy.
+      await repo.markEmail(m.id, st, attempts); await repo.setEmailBody(m.id, st === 'sent' ? redactSecrets(body) : body, html && st === 'sent' ? redactSecrets(html) : html);
+    } catch (e) {
+      const status = e instanceof ProviderError ? e.status : 0; const permanent = status >= 400 && status < 500 && status !== 408 && status !== 429;
+      const dead = permanent || attempts >= MAX_ATTEMPTS; await repo.markEmail(m.id, dead ? 'dead' : 'queued', attempts, dead ? null : new Date(now + RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)]).toISOString(), String((e as Error).message ?? e).slice(0, 300));
+    }
+  }
+}
+/** One verified Stripe event → one idempotent engine command. Shared by the real webhook and the test-mode simulator. */
+export async function processStripeEvent(env: Env, payload: string) {
+  const evt = JSON.parse(payload); const sim = stripeMode(env) === 'simulated'; const toTier = priceToTier(env);
+  const cmd = stripeToCommand(evt, (id) => toTier(id) ?? (sim ? mockPriceToTier(id) : null)); if (!cmd) return { received: true, ignored: evt.type };
+  try { const r = await runCommand(env, SYSTEM, cmd); return { received: true, duplicate: !!r.created?.duplicate }; }
+  catch (e) { if (e instanceof WorkflowError) return { received: true, ignored: e.message }; throw e; }
+}
+export const simulatorSecret = (env: Env) => hmac(secretOf(env), 'stripe-simulator');
 /** Cron: SLA/overdue sweep every run; weekly digests on the Sunday schedule; then a per-user notification email digest. */
 export async function scheduled(env: Env, cron: string) {
   await runCommand(env, SYSTEM, { type: 'sweep' });
   if (cron === '0 23 * * SUN') await runCommand(env, SYSTEM, { type: 'generateDigests' });
   const repo = new Repo(env.DB); const pending = (await repo.unemailedNotifications()).results; const byUser = new Map<string, typeof pending>();
   for (const n of pending) byUser.set(n.user_id, [...(byUser.get(n.user_id) ?? []), n]);
-  for (const [, list] of byUser) { const u = list[0]; if (u.email) await repo.insertEmail({ id: newId('em'), to: u.email, subject: `${list.length} update${list.length > 1 ? 's' : ''} from Baller Connection`, body: `Hi ${u.name},\n\n${list.map((n) => `• ${n.text}`).join('\n')}\n\nOpen the app to act on these.`, kind: 'notification-digest', status: 'queued' }); await repo.markEmailed(list.map((n) => n.id)); }
+  for (const [, list] of byUser) { const u = list[0]; if (u.email) await queueEmail(env, 'notification-digest', u.email, { name: u.name, count: list.length, items: list.map((n) => `• ${n.text}`).join('\n') }, u.user_id); await repo.markEmailed(list.map((n) => n.id)); }
   await deliver(env);
 }
 
@@ -58,14 +95,14 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   const cors: Record<string, string> = env.ALLOW_ORIGIN && origin === env.ALLOW_ORIGIN ? { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'content-type, authorization, x-player-id, x-watch-for, range', 'access-control-allow-methods': 'GET, POST, OPTIONS', vary: 'origin' } : {};
   const json = (data: unknown, status = 200, extra: Record<string, string> = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...cors, ...extra } });
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-  const repo = new Repo(env.DB); const secret = env.SESSION_SECRET ?? 'dev-only-secret-change-me'; const secure = url.protocol === 'https:';
+  const repo = new Repo(env.DB); const secret = secretOf(env); const secure = url.protocol === 'https:'; const ip = req.headers.get('cf-connecting-ip') ?? req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? 'local'; const app = env.APP_URL ?? url.origin;
   const body = async <T,>() => (req.method === 'POST' ? ((await req.json().catch(() => ({}))) as T) : ({} as T));
   const startSession = async (userId: string) => { const tok = newToken(); await repo.createSession(await hmac(secret, tok), userId, 30, req.headers.get('user-agent') ?? ''); return { 'set-cookie': sessionCookie(tok, secure), 'x-session-token': tok }; };
   const me = async (): Promise<Actor & { name: string; role: UserRole } | null> => { const t = readToken(req); if (!t) return null; const u = await repo.sessionUser(await hmac(secret, t)); return u ? { id: u.id as string, role: u.role as UserRole, name: u.name as string, familyId: u.family_id as string | null, playerId: u.player_id as string | null } : null; };
   const need = async (ep: Endpoint) => { const a = await me(); if (!a) throw new HttpError(401, 'Sign in required'); if (!ENDPOINT_ROLES[ep].includes(a.role)) throw new HttpError(403, `${a.role} can’t access ${ep}`); return a; };
   try {
     await ensureSeeded(env);
-    if (path === '/api/health') return json({ ok: true, version: await repo.version(), demo: env.DEMO === '1', email: makeProvider(env).name });
+    if (path === '/api/health') return json({ ok: true, version: await repo.version(), demo: env.DEMO === '1', email: makeProvider(env).name, stripe: stripeMode(env) });
     if (path === '/api/workflow') return json({ transitions: TRANSITIONS });
     // ---------- auth ----------
     if (path === '/api/auth/login' && req.method === 'POST') {
@@ -76,14 +113,44 @@ export async function handle(req: Request, env: Env): Promise<Response> {
       return json({ user: { id: u.id, name: u.name, role: u.role } }, 200, await startSession(u.id as string));
     }
     if (path === '/api/auth/logout' && req.method === 'POST') { const t = readToken(req); if (t) await repo.deleteSession(await hmac(secret, t)); return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }); }
+    if (path === '/api/auth/logout-all' && req.method === 'POST') { const a = await me(); if (a) await repo.endAllSessions(a.id); return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }); }
+    // ---------- v6 magic links: hashed, 15 min, single use; same answer whether or not the account exists ----------
+    if (path === '/api/auth/magic' && req.method === 'POST') {
+      const b = await body<{ email?: string }>(); const email = (b.email ?? '').trim().toLowerCase(); const pair = `magic:${email}|${ip}`; const ipKey = `magic-ip:${ip}`;
+      if (!/^\S+@\S+\.\S+$/.test(email)) throw new HttpError(400, 'Enter your email address.');
+      if ((await repo.recentFailures(pair)) >= 3 || (await repo.recentFailures(ipKey)) >= 20) throw new HttpError(429, 'Too many sign-in links requested. Try again in 15 minutes.');
+      await repo.recordFailure(pair); await repo.recordFailure(ipKey); // every request counts, so the limit can't reveal which emails exist
+      const u = await repo.userByLogin(email); const tok = newToken(); const th = await hmac(secret, tok);
+      const kid = u?.role === 'player' && u.player_id ? ((await repo.playerAge(u.player_id as string))?.age ?? 0) < 13 : false; // under-13 players sign in with the PIN their parent manages
+      if (u && u.email === email && !kid) { await repo.createMagicToken(th, u.id as string, 15, ip); await queueEmail(env, 'magic-link', email, { name: String(u.name).split(' ')[0], token: tok }, u.id as string); await deliver(env); }
+      return json({ ok: true, message: 'If that email has an account, a sign-in link is on its way. It works once, for 15 minutes.' });
+    }
+    if (path === '/api/auth/magic/verify' && req.method === 'POST') {
+      const b = await body<{ token?: string }>(); const vKey = `magic-verify:${ip}`; if ((await repo.recentFailures(vKey)) >= 10) throw new HttpError(429, 'Too many attempts. Try again in 15 minutes.');
+      const th = await hmac(secret, String(b.token ?? '')); const uid = await repo.useMagicToken(th);
+      if (!uid) { await repo.recordFailure(vKey); const st = await repo.magicTokenState(th); throw new HttpError(400, st?.used_at ? 'That sign-in link was already used. Request a new one.' : st ? 'That sign-in link has expired (links last 15 minutes). Request a new one.' : 'That sign-in link isn’t valid. Request a new one.'); }
+      const old = readToken(req); if (old) await repo.deleteSession(await hmac(secret, old)); // session upgrade: never reuse a pre-login session token
+      const u = await repo.userById(uid); if (!u) throw new HttpError(400, 'That account is no longer active.');
+      return json({ user: { id: u.id, name: u.name, role: u.role } }, 200, await startSession(uid));
+    }
+    if (path === '/api/unsubscribe') {
+      const uid = url.searchParams.get('u') ?? ''; const c = url.searchParams.get('c') ?? ''; const sig = url.searchParams.get('s') ?? '';
+      const page = (title: string, msg: string, form = '') => new Response(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:Arial,sans-serif;background:#F5F3EE;color:#1B2236;padding:40px"><div style="max-width:480px;margin:auto;background:#fff;border-radius:12px;padding:28px"><p style="font-weight:800;letter-spacing:1px;color:#0A1430">BALLER<span style="color:#FF5E1A">CONNECTION</span></p><h1 style="color:#0A1430;font-size:22px">${title}</h1><p>${msg}</p>${form}</div></body>`, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+      const cats: EmailCategory[] = c === 'all' ? ['coaching', 'digest', 'updates'] : (['coaching', 'digest', 'updates'] as const).includes(c as never) ? [c as EmailCategory] : [];
+      if (!cats.length || (await hmac(secret, `unsub:${uid}:${c}`)).slice(0, 32) !== sig) return page('Link not valid', 'This unsubscribe link is incomplete or was changed. Change email settings in the app instead.');
+      const label = c === 'all' ? 'all non-essential email' : c === 'coaching' ? 'coaching emails' : c === 'digest' ? 'the weekly parent digest' : 'update roundups';
+      if (req.method !== 'POST') return page(`Unsubscribe from ${label}?`, 'One click and you’re done. Sign-in links, invites, consent and payment emails still arrive.', `<form method="post"><button style="background:#FF5E1A;color:#0A1430;border:0;border-radius:999px;padding:12px 22px;font-weight:800;cursor:pointer">Unsubscribe</button></form>`);
+      await runCommand(env, SYSTEM, { type: 'setEmailPrefs', userId: uid, prefs: Object.fromEntries(cats.map((k) => [k, false])) });
+      return page('You’re unsubscribed', `You won’t get ${label} anymore. Essential account email (sign-in links, payments) still arrives. Turn it back on anytime in Email settings.`);
+    }
     if (path === '/api/auth/me') { const a = await me(); return a ? json({ user: a }) : json({ user: null }, 401); }
     if (path === '/api/auth/accept-invite' && req.method === 'POST') {
-      const b = await body<{ token?: string; code?: string; parentName: string; email: string; password: string }>();
-      if (!b.password || b.password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
+      const b = await body<{ token?: string; code?: string; parentName: string; email: string; password?: string }>();
+      if (b.password && b.password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters (or leave it empty and sign in with emailed links).');
       if (await repo.userByLogin(b.email ?? '')) throw new HttpError(409, 'An account with that email exists. Sign in instead.');
       const ipKey = `invite:${req.headers.get('cf-connecting-ip') ?? req.headers.get('x-forwarded-for') ?? 'local'}`; if ((await repo.recentFailures(ipKey)) >= 5) throw new HttpError(429, 'Too many attempts. Try again in 15 minutes.');
       const uid = newId('usr'); const r = await runCommand(env, PUBLIC, { type: 'acceptInvite', token: b.token, code: b.code, parentName: b.parentName, email: b.email, userId: uid }).catch(async (e) => { if (e instanceof WorkflowError) await repo.recordFailure(ipKey); throw e; });
-      const userId = r.created?.userId ?? uid; await repo.setCredential(userId, 'password_hash', await hashSecret(b.password));
+      const userId = r.created?.userId ?? uid; if (b.password) await repo.setCredential(userId, 'password_hash', await hashSecret(b.password)); // no password = passwordless account (magic links)
       return json({ user: { id: userId, role: 'parent' }, playerId: r.created?.playerId }, 200, await startSession(userId));
     }
     if (path === '/api/auth/player-login' && req.method === 'POST') {
@@ -94,13 +161,13 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     }
     if (path === '/api/auth/request-password' && req.method === 'POST') {
       const b = await body<{ email: string }>(); const u = await repo.userByLogin(b.email ?? '');
-      if (u?.email) { const tok = newToken(); await repo.createPasswordToken(await hmac(secret, tok), u.id as string, 2); await repo.insertEmail({ id: newId('em'), to: u.email as string, subject: 'Set your Baller Connection password', body: `Set your password (link valid 2 hours): /reset?token=${tok}`, kind: 'password', status: 'queued' }); await deliver(env); }
+      if (u?.email) { const tok = newToken(); await repo.createPasswordToken(await hmac(secret, tok), u.id as string, 2); await queueEmail(env, 'password', u.email as string, { token: tok, hours: 2 }, u.id as string); await deliver(env); }
       return json({ ok: true });
     }
     if (path === '/api/auth/reset-password' && req.method === 'POST') {
       const b = await body<{ token: string; password: string }>(); if (!b.password || b.password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
       const uid = await repo.usePasswordToken(await hmac(secret, b.token ?? '')); if (!uid) throw new HttpError(400, 'That link is invalid or expired.');
-      await repo.setCredential(uid, 'password_hash', await hashSecret(b.password)); return json({ ok: true }, 200, await startSession(uid));
+      await repo.setCredential(uid, 'password_hash', await hashSecret(b.password)); await repo.endAllSessions(uid); return json({ ok: true }, 200, await startSession(uid)); // new password signs out other devices
     }
     // ---------- public intake ----------
     if (path === '/api/apply' && req.method === 'POST') { const b = await body<Command>(); if (b.type !== 'submitApplication') throw new HttpError(400, 'Bad request'); const r = await runCommand(env, (await me()) ?? PUBLIC, b); return json({ ok: true, playerId: r.created?.playerId }); }
@@ -109,6 +176,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     if (path === '/api/commands' && req.method === 'POST') {
       const a = await need('commands'); const cmd = await body<Command>();
       if (SERVER_ONLY.has(cmd.type)) throw new HttpError(403, 'Clips are added by uploading them.');
+      if (WEBHOOK_ONLY.has(cmd.type)) throw new HttpError(403, 'Billing changes come from Stripe (checkout, portal, webhooks).');
       if (SYSTEM_ONLY.has(cmd.type) && env.DEMO !== '1') throw new HttpError(403, `${cmd.type} runs on the scheduler only`);
       const r = await runCommand(env, SYSTEM_ONLY.has(cmd.type) ? SYSTEM : a, cmd);
       return json({ snapshot: scopeSnapshot(r.snapshot, a), events: r.events.filter((e) => !e.playerId || scopeSnapshot(r.snapshot, a).players.some((p) => p.id === e.playerId)) });
@@ -143,7 +211,42 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     if (path === '/api/queue') { const a = await need('snapshot'); const s = scopeSnapshot(await repo.load(), a); return json({ coach: buildQueue(s, a.role === 'assistant' ? a.id : undefined), ops: a.role === 'ops' || a.role === 'head' ? buildOpsQueue(s) : [] }); }
     if (path === '/api/team') { await need('team'); return json(teamLoad(await repo.load())); }
     if (path === '/api/audit') { await need('audit'); const s = await repo.load(); return json(s.events.slice(-Number(url.searchParams.get('limit') ?? 200)).reverse()); }
-    if (path === '/api/outbox') { await need('outbox'); return json((await repo.outbox()).results); }
+    if (path === '/api/outbox') { await need('outbox'); return json((await repo.outbox(200, url.searchParams.get('status') ?? undefined)).results); }
+    if (path === '/api/outbox/retry' && req.method === 'POST') { await need('outbox'); const b = await body<{ id: string }>(); await repo.requeueEmail(b.id); await deliver(env); return json({ ok: true }); }
+    // ---------- v6 billing (Stripe test mode, or the built-in simulator when no key is set) ----------
+    if (path === '/api/stripe/webhook' && req.method === 'POST') {
+      const payload = await req.text(); const sim = stripeMode(env) === 'simulated'; const whsec = env.STRIPE_WEBHOOK_SECRET ?? (sim ? await simulatorSecret(env) : '');
+      if (!whsec) throw new HttpError(503, 'STRIPE_WEBHOOK_SECRET is not set.');
+      if (!(await verifyStripe(payload, req.headers.get('stripe-signature'), whsec))) throw new HttpError(400, 'Bad signature');
+      return json(await processStripeEvent(env, payload));
+    }
+    if (path === '/api/billing/checkout' && req.method === 'POST') {
+      const a = await need('billing'); if (a.role !== 'parent') throw new HttpError(403, 'Checkout is for the family’s parent account.');
+      const b = await body<{ playerId: string; tier?: Tier }>(); const s = await repo.load(); const p = s.players.find((x) => x.id === b.playerId); if (!p || !canSeePlayer(a, p)) throw new HttpError(404, 'Not found');
+      const tier: Tier = TIERS.includes(b.tier as Tier) ? (b.tier as Tier) : p.tier; const block = checkoutBlock(s, p, tier); if (block) return json(block, 409);
+      const back = p.state === 'Onboarding' ? `${app}/#/welcome?p=${p.id}` : `${app}/#/parent?p=${p.id}&tab=billing`; const mode = stripeMode(env);
+      if (mode === 'simulated') return json({ url: `${app}/#/checkout?p=${p.id}&tier=${encodeURIComponent(tier)}`, simulated: true });
+      if (mode === 'live' && env.STRIPE_ALLOW_LIVE !== '1') throw new HttpError(503, 'Live Stripe keys are switched off (test mode only). Set STRIPE_ALLOW_LIVE=1 when you are ready to charge real cards.');
+      const price = priceId(env, tier); if (!price) throw new HttpError(503, `The Stripe price for ${tier} isn’t configured (STRIPE_PRICE_*).`);
+      const u = await repo.userById(a.id); const sess = await new StripeClient(env.STRIPE_SECRET_KEY!).checkout({ price, playerId: p.id, tier, email: (u?.email as string) ?? null, customer: subscriptionOf(s, p.id)?.customerId, successUrl: `${back}&paid=1`, cancelUrl: `${back}&canceled=1` });
+      return json({ url: sess.url });
+    }
+    if (path === '/api/billing/portal' && req.method === 'POST') {
+      const a = await need('billing'); const b = await body<{ playerId: string }>(); const s = await repo.load(); const p = s.players.find((x) => x.id === b.playerId); if (!p || !canSeePlayer(a, p)) throw new HttpError(404, 'Not found');
+      if (stripeMode(env) === 'simulated') return json({ url: `${app}/#/billing/portal?p=${p.id}`, simulated: true });
+      const cus = subscriptionOf(s, p.id)?.customerId; if (!cus) throw new HttpError(409, 'No Stripe customer yet: choose a plan first.');
+      return json({ url: (await new StripeClient(env.STRIPE_SECRET_KEY!).portal(cus, `${app}/#/parent?p=${p.id}&tab=billing`)).url });
+    }
+    if (path === '/api/billing/simulate' && req.method === 'POST') {
+      const a = await need('billing'); if (stripeMode(env) !== 'simulated') throw new HttpError(403, 'The billing simulator is only on when no Stripe key is set.');
+      const b = await body<{ playerId: string; outcome: MockOutcome; tier?: Tier }>(); const s = await repo.load(); const p = s.players.find((x) => x.id === b.playerId); if (!p || !canSeePlayer(a, p)) throw new HttpError(404, 'Not found');
+      const familyOk: string[] = ['checkout', 'cancel', 'reactivate', 'invoice_paid', 'switch:Foundation', 'switch:Development', 'switch:Inner Circle']; if (a.role === 'parent' && !familyOk.includes(b.outcome)) throw new HttpError(403, 'Staff-only simulation.');
+      if (b.outcome === 'checkout') { const block = checkoutBlock(s, p, b.tier ?? p.tier); if (block) return json(block, 409); }
+      if (b.outcome.startsWith('switch:')) { const block = b.outcome === 'switch:Inner Circle' && p.tier !== 'Inner Circle' ? checkoutBlock({ ...s, subscriptions: [] }, { ...p, billing: 'paid' }, 'Inner Circle') : null; if (block?.waitlist) return json(block, 409); }
+      const whsec = await simulatorSecret(env); const results = [];
+      for (const e of mockStripeEvents(s, p.id, b.outcome, b.tier)) { const payload = JSON.stringify(e); const sig = await signStripe(payload, whsec); if (!(await verifyStripe(payload, sig, whsec))) throw new HttpError(500, 'Simulator signature failed'); results.push(await processStripeEvent(env, payload)); }
+      return json({ ok: true, results, snapshot: scopeSnapshot(await repo.load(), a) });
+    }
     if (path === '/api/notifications') { const a = await need('notifications'); return json((await repo.load()).notifications.filter((n) => n.userId === a.id).reverse()); }
     const ex = path.match(/^\/api\/players\/([\w-]+)\/export\.csv$/);
     if (ex) { const a = await need('export'); const s = await repo.load(); const p = s.players.find((x) => x.id === ex[1]); if (!p || !canSeePlayer(a, p)) throw new HttpError(404, 'Not found'); return new Response(playerCsv(s, p.id), { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${p.name.replace(/\W+/g, '-')}.csv"`, ...cors } }); }
@@ -152,7 +255,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     if (cal) { if ((await hmac(secret, 'cal:' + cal[1])).slice(0, 32) !== cal[2]) throw new HttpError(403, 'Bad calendar link'); const u = await repo.userById(cal[1]); if (!u) throw new HttpError(404, 'Not found'); const a: Actor = { id: u.id as string, role: u.role as UserRole, familyId: u.family_id as string, playerId: u.player_id as string }; return new Response(calendarIcs(scopeSnapshot(await repo.load(), a)), { headers: { 'content-type': 'text/calendar; charset=utf-8' } }); }
     if (path === '/api/staff' && req.method === 'POST') {
       const a = await need('staff'); const b = await body<{ name: string; email: string; role: 'assistant' | 'ops' }>(); const r = await runCommand(env, a, { type: 'inviteStaff', ...b });
-      const tok = newToken(); await repo.createPasswordToken(await hmac(secret, tok), r.created!.userId!, 72); await repo.insertEmail({ id: newId('em'), to: b.email, subject: 'Set your password', body: `Set your password: /reset?token=${tok}`, kind: 'password', status: 'queued' }); await deliver(env); return json({ ok: true });
+      const tok = newToken(); await repo.createPasswordToken(await hmac(secret, tok), r.created!.userId!, 72); await queueEmail(env, 'password', b.email.trim().toLowerCase(), { token: tok, hours: 72 }, r.created!.userId!); await deliver(env); return json({ ok: true });
     }
     if (path === '/api/demo/reset' && req.method === 'POST') { if (env.DEMO !== '1') throw new HttpError(403, 'Demo mode is off'); await wipe(env.DB); await seedDb(env.DB); return json({ ok: true }); }
     if (path === '/api/demo/sweep' && req.method === 'POST') { if (env.DEMO !== '1') throw new HttpError(403, 'Demo mode is off'); await scheduled(env, url.searchParams.get('cron') ?? '*/15 * * * *'); return json({ ok: true }); }
@@ -166,7 +269,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   }
 }
 async function wipe(db: Db) {
-  const tables = ['events', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
+  const tables = ['events', 'billing_events', 'subscriptions', 'magic_tokens', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
   await db.batch([db.prepare('PRAGMA defer_foreign_keys = ON'), ...tables.map((t) => db.prepare(`DELETE FROM ${t}`))]);
 }
 export type { Snapshot };
