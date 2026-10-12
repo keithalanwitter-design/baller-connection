@@ -8,16 +8,20 @@ import type { Db } from './db';
 import { makeProvider } from './email';
 import { Repo } from './repo';
 import { playerCsv, calendarIcs } from './export';
+import type { BlobStore } from './blobs';
+import { CLIP_MAX_BYTES, canSeeClip, clipError, normalizeMime, sniffMime, videoDuration } from '../shared/clips';
 
-export interface Env { DB: Db; SESSION_SECRET?: string; EMAIL_PROVIDER?: string; EMAIL_API_KEY?: string; EMAIL_FROM?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string }
+export interface Env { DB: Db; SESSION_SECRET?: string; EMAIL_PROVIDER?: string; EMAIL_API_KEY?: string; EMAIL_FROM?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string; /** Clip bytes: R2 (Worker) or local disk (Node). Without it, uploads answer 503. */ BLOBS?: BlobStore }
 class HttpError extends Error { status: number; constructor(status: number, msg: string) { super(msg); this.status = status; } }
 const SYSTEM_ONLY = new Set(['sweep', 'advanceClock']);
+/** Commands only the server itself may run (registerClip is issued by POST /api/clips after it has checked the bytes). */
+const SERVER_ONLY = new Set(['registerClip']);
 
 /** First boot: demo data (SEED=demo, local/dev only) or an empty program with one head-coach account (OWNER_EMAIL). */
 export async function ensureSeeded(env: Env) {
   const repo = new Repo(env.DB); if (await repo.isSeeded()) return;
   if (env.SEED === 'demo' || env.DEMO === '1') { await seedDb(env.DB); return; }
-  const s = seed(); const empty = { ...s, reflections: [], cycleReviews: [], users: [{ id: 'u_head', name: env.OWNER_NAME ?? 'Head Coach', email: (env.OWNER_EMAIL ?? 'owner@example.com').toLowerCase(), role: 'head' as const, active: true }], families: [], players: [], applications: [], invites: [], consents: [], cycles: [], assignments: [], submissions: [], reviews: [], messages: [], habits: [], milestones: [], digests: [], meetings: [], notifications: [], outbox: [], dataRequests: [], events: [] };
+  const s = seed(); const empty = { ...s, reflections: [], cycleReviews: [], clips: [], users: [{ id: 'u_head', name: env.OWNER_NAME ?? 'Head Coach', email: (env.OWNER_EMAIL ?? 'owner@example.com').toLowerCase(), role: 'head' as const, active: true }], families: [], players: [], applications: [], invites: [], consents: [], cycles: [], assignments: [], submissions: [], reviews: [], messages: [], habits: [], milestones: [], digests: [], meetings: [], notifications: [], outbox: [], dataRequests: [], events: [] };
   await repo.save(empty); // owner sets a password with “First time / forgot password” (emailed link)
 }
 export async function seedDb(db: Db) {
@@ -28,7 +32,10 @@ export async function seedDb(db: Db) {
 
 /** Runs one command through permissions + engine, persists the row diff, then delivers queued mail. */
 export async function runCommand(env: Env, actor: Actor, cmd: Command) {
-  await ensureSeeded(env); const repo = new Repo(env.DB); const prev = await repo.load(); const r = dispatch(prev, cmd, actor); await repo.save(r.snapshot, prev); await deliver(env); return r;
+  await ensureSeeded(env); const repo = new Repo(env.DB); const prev = await repo.load(); const r = dispatch(prev, cmd, actor); await repo.save(r.snapshot, prev);
+  // Clips removed by this command (deleted on request, 90-day retention, data deletion): remove the bytes too.
+  const kept = new Set((r.snapshot.clips ?? []).map((c) => c.id)); for (const c of prev.clips ?? []) if (!kept.has(c.id) && env.BLOBS && !c.storageKey.startsWith('demo/')) await env.BLOBS.delete(c.storageKey).catch(() => undefined);
+  await deliver(env); return r;
 }
 /** Once a real provider has the mail, the outbox copy no longer needs the invite/reset secret. (The Log provider keeps it: it IS the delivery in dev.) */
 export const redactSecrets = (b: string) => b.replace(/token=[A-Za-z0-9_-]+/g, 'token=[sent]').replace(/code \d{6}/g, 'code [sent]');
@@ -48,7 +55,7 @@ export async function scheduled(env: Env, cron: string) {
 
 export async function handle(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url); const path = url.pathname.replace(/\/+$/, ''); const origin = req.headers.get('origin');
-  const cors: Record<string, string> = env.ALLOW_ORIGIN && origin === env.ALLOW_ORIGIN ? { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'content-type, authorization', 'access-control-allow-methods': 'GET, POST, OPTIONS', vary: 'origin' } : {};
+  const cors: Record<string, string> = env.ALLOW_ORIGIN && origin === env.ALLOW_ORIGIN ? { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'content-type, authorization, x-player-id, x-watch-for, range', 'access-control-allow-methods': 'GET, POST, OPTIONS', vary: 'origin' } : {};
   const json = (data: unknown, status = 200, extra: Record<string, string> = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...cors, ...extra } });
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
   const repo = new Repo(env.DB); const secret = env.SESSION_SECRET ?? 'dev-only-secret-change-me'; const secure = url.protocol === 'https:';
@@ -101,9 +108,37 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     if (path === '/api/snapshot') { const a = await need('snapshot'); return json({ me: a, snapshot: scopeSnapshot(await repo.load(), a) }); }
     if (path === '/api/commands' && req.method === 'POST') {
       const a = await need('commands'); const cmd = await body<Command>();
+      if (SERVER_ONLY.has(cmd.type)) throw new HttpError(403, 'Clips are added by uploading them.');
       if (SYSTEM_ONLY.has(cmd.type) && env.DEMO !== '1') throw new HttpError(403, `${cmd.type} runs on the scheduler only`);
       const r = await runCommand(env, SYSTEM_ONLY.has(cmd.type) ? SYSTEM : a, cmd);
       return json({ snapshot: scopeSnapshot(r.snapshot, a), events: r.events.filter((e) => !e.playerId || scopeSnapshot(r.snapshot, a).players.some((p) => p.id === e.playerId)) });
+    }
+    // ---------- clips (≤30 s, ≤50 MB, mp4/mov/webm). Bytes go through the API so access is checked on every read. ----------
+    if (path === '/api/clips' && req.method === 'POST') {
+      const a = await need('clips'); if (a.role !== 'player' && a.role !== 'parent') throw new HttpError(403, 'Only the player or a parent can add clips.');
+      if (!env.BLOBS) throw new HttpError(503, 'Clip storage isn’t configured on this server yet.');
+      const pid = req.headers.get('x-player-id') ?? ''; const s = await repo.load(); const p = s.players.find((x) => x.id === pid); if (!p || !canSeePlayer(a, p)) throw new HttpError(404, 'Not found');
+      const declared = Number(req.headers.get('content-length') ?? 0); if (declared > CLIP_MAX_BYTES) throw new HttpError(413, clipError({ mime: 'video/mp4', bytes: declared, durationSec: 1 })!);
+      const bytes = new Uint8Array(await req.arrayBuffer()); const sniffed = sniffMime(bytes); const mime = sniffed ?? normalizeMime(req.headers.get('content-type') ?? '');
+      if (!sniffed) throw new HttpError(415, 'Clips must be MP4, MOV or WebM video.');
+      const err = clipError({ mime, bytes: bytes.length, durationSec: videoDuration(bytes) }); if (err) throw new HttpError(bytes.length > CLIP_MAX_BYTES ? 413 : 422, err);
+      const clipId = newId('clip'); const key = `clips/${p.id}/${clipId}`; await env.BLOBS.put(key, bytes, mime);
+      try { await runCommand(env, a, { type: 'registerClip', playerId: p.id, clipId, storageKey: key, mime, bytes: bytes.length, durationSec: videoDuration(bytes)!, watchFor: decodeURIComponent(req.headers.get('x-watch-for') ?? '') }); }
+      catch (e) { await env.BLOBS.delete(key).catch(() => undefined); throw e; }
+      const s2 = await repo.load(); return json({ clip: s2.clips.find((c) => c.id === clipId), snapshot: scopeSnapshot(s2, a) });
+    }
+    const cm = path.match(/^\/api\/clips\/([\w-]+)$/);
+    if (cm && req.method === 'GET') {
+      const a = await need('clips'); const s = await repo.load(); const c = s.clips.find((x) => x.id === cm[1]); const p = c && s.players.find((x) => x.id === c.playerId);
+      if (!c || !canSeeClip(a, p, c)) throw new HttpError(404, 'Not found'); // 404, not 403: don't confirm a clip exists
+      const priv = { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes', ...cors };
+      if (c.storageKey.startsWith('demo/') && !(env.BLOBS && (await env.BLOBS.get(c.storageKey, { offset: 0, length: 1 })))) return new Response(null, { status: 302, headers: { location: `${env.APP_URL ?? ''}/${c.storageKey}`, ...priv } });
+      if (!env.BLOBS) throw new HttpError(503, 'Clip storage isn’t configured.');
+      const rg = (req.headers.get('range') ?? '').match(/^bytes=(\d+)-(\d*)$/); const start = rg ? Number(rg[1]) : 0; const end = rg && rg[2] ? Number(rg[2]) : undefined;
+      const o = await env.BLOBS.get(c.storageKey, rg ? { offset: start, length: end !== undefined ? end - start + 1 : undefined } : undefined); if (!o) throw new HttpError(404, 'Not found');
+      if (!rg) return new Response(o.body as BodyInit, { headers: { 'content-type': c.mime, 'content-length': String(o.size), ...priv } });
+      const last = end !== undefined ? Math.min(end, o.size - 1) : o.size - 1;
+      return new Response(o.body as BodyInit, { status: 206, headers: { 'content-type': c.mime, 'content-range': `bytes ${start}-${last}/${o.size}`, 'content-length': String(last - start + 1), ...priv } });
     }
     if (path === '/api/queue') { const a = await need('snapshot'); const s = scopeSnapshot(await repo.load(), a); return json({ coach: buildQueue(s, a.role === 'assistant' ? a.id : undefined), ops: a.role === 'ops' || a.role === 'head' ? buildOpsQueue(s) : [] }); }
     if (path === '/api/team') { await need('team'); return json(teamLoad(await repo.load())); }
@@ -131,7 +166,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   }
 }
 async function wipe(db: Db) {
-  const tables = ['events', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
+  const tables = ['events', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
   await db.batch([db.prepare('PRAGMA defer_foreign_keys = ON'), ...tables.map((t) => db.prepare(`DELETE FROM ${t}`))]);
 }
 export type { Snapshot };

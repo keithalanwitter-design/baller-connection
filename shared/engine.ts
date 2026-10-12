@@ -2,9 +2,10 @@ import { CONSENT_TEXT, CONSENT_VERSION, type Command, type DomainEvent, type Lif
 import { composeFeedback, plainFeedback, rhythmToday } from './personal';
 import { promiseRisks, reviewsAllowed, reviewedThisWeek } from './promises';
 import { sha256 } from './sha256';
+import { CLIP_RETENTION_DAYS, clipError, clipExpired, fmtT } from './clips';
 import { assertCan, type Actor } from './permissions';
 import { addBusinessDays, isoDay, officeDue, shortWhen, weekKey } from './time';
-import { canTransition, capacity, clock, first, headCoach, lastSubmission, openAssignment, pendingReview, playerAssignments, playerCycle, progress, replyDue, staff, userName } from './workflow';
+import { lastReview, canTransition, capacity, clock, first, headCoach, lastSubmission, openAssignment, pendingReview, playerAssignments, playerCycle, progress, replyDue, staff, userName } from './workflow';
 
 export class WorkflowError extends Error {}
 /** Optimistic concurrency: someone else changed this player since you loaded it. Mapped to HTTP 409. */
@@ -68,7 +69,18 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       if (r.key === 'midweek' && subs === 0) { notify(famUsers(p).filter((u) => s.users.find((x) => x.id === u)?.role === 'player'), 'rhythm', `Mid-week check-in: log one rep tonight.`, '/app', p.id, `rhythm:mid:${p.id}:${wk}`); notify([p.coachId], 'rhythm', `${p.name} has no check-in yet this week.`, `/coach/player/${p.id}`, p.id, `rhythm:midc:${p.id}:${wk}`); }
       if (r.key === 'wrap' && !s.reflections.some((x) => x.playerId === p.id && x.week === wk)) notify(famUsers(p).filter((u) => s.users.find((x) => x.id === u)?.role === 'player'), 'rhythm', `Friday wrap: two lines on your week.`, '/app', p.id, `rhythm:wrap:${p.id}:${wk}`);
     }
+    for (const r of s.reviews.filter((x) => x.status === 'final' && !x.reaction && !x.nudgedAt)) {
+      const p = s.players.find((x) => x.id === r.playerId); const since = new Date(r.signedOffAt ?? r.at).getTime(); if (!p || p.state === 'Paused' || n - since < 48 * 36e5) continue;
+      r.nudgedAt = clock(s).toISOString(); log('feedback', 'Gentle nudge: feedback not confirmed after 48 h', p.id);
+      notify(famUsers(p), 'rhythm', `Quick check: does ${first(userName(s, r.reviewerId))}’s note make sense? Tap “Got it” or ask a question.`, '/app', p.id, `nudge:${r.id}`);
+    }
+    const expired = s.clips.filter((c) => clipExpired(c, clock(s))); if (expired.length) { s.clips = s.clips.filter((c) => !expired.includes(c)); for (const c of expired) log('clip', `Clip removed after ${CLIP_RETENTION_DAYS} days`, c.playerId); }
     for (const inv of s.invites.filter((i) => i.status === 'pending' && new Date(i.expiresAt).getTime() < n)) { inv.status = 'expired'; log('invite', `Invite expired (${inv.email})`, inv.playerId); notify(ops(), 'invite_expired', `Invite expired for ${userNameOfPlayer(inv.playerId)}.`, `/ops/player/${inv.playerId}`, inv.playerId, `expired:${inv.id}`); }
+  };
+  const startNext = (p: Player) => {
+      const cy = playerCycle(s, p.id); const ended = !!cy && new Date(cy.endAt) < t; const q = ended ? undefined : playerAssignments(s, p.id).find((a) => a.status === 'queued');
+      if (q) { q.status = 'open'; move(p, 'Work ready', `Unlocked: ${q.title}`); }
+      else { const c = playerCycle(s, p.id); const b = progress(s, p.id).level; if (c) c.status = 'review'; move(p, 'Cycle review', `Cycle ${c?.index} complete`); milestone(p, `Cycle ${c?.index} complete`); levelCheck(p, b); notify([p.coachId], 'cycle_review', `${p.name} finished cycle ${c?.index}. Do the cycle review.`, `/coach/cycle/${p.id}`, p.id); notify(famUsers(p), 'cycle_review', `Cycle ${c?.index} done! Tell your coach what improved.`, '/app/develop#cycle', p.id); }
   };
   const userNameOfPlayer = (pid: string) => s.players.find((p) => p.id === pid)?.name ?? 'player';
 
@@ -150,11 +162,13 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const p = P(cmd.playerId); guard(p); const a = openAssignment(s, p.id); if (!a) throw new WorkflowError('Nothing open to submit.');
       if (cmd.repsDone < 1 || cmd.repsDone > a.reps) throw new WorkflowError('Tap at least one finished set.'); if (cmd.reflection.trim().length < 5) throw new WorkflowError('Add one honest sentence.');
       if (!isUrl(cmd.linkUrl)) throw new WorkflowError('Links must start with http:// or https://');
+      const clip = cmd.clipId ? s.clips.find((c) => c.id === cmd.clipId && c.playerId === p.id && !c.deletedAt) : undefined; if (cmd.clipId && !clip) throw new WorkflowError('That clip isn’t available. Upload it again.'); if (clip?.submissionId) throw new WorkflowError('That clip is already attached to another check-in.');
       const b = progress(s, p.id).level; const dueBy = replyDue(s, p, t).toISOString(); const allowed = reviewsAllowed(s, p); const reviewed = reviewedThisWeek(s, p) < allowed;
-      s.submissions.push({ id: id('sub'), assignmentId: a.id, playerId: p.id, repsDone: cmd.repsDone, reflection: cmd.reflection.trim(), linkUrl: cmd.linkUrl?.trim() || null, at, dueBy, reviewed });
+      s.submissions.push({ id: id('sub'), assignmentId: a.id, playerId: p.id, repsDone: cmd.repsDone, reflection: cmd.reflection.trim(), linkUrl: cmd.linkUrl?.trim() || null, clipId: clip?.id ?? null, at, dueBy, reviewed });
+      if (clip) { clip.submissionId = s.submissions[s.submissions.length - 1].id; clip.assignmentId = a.id; if (cmd.watchFor !== undefined) clip.watchFor = cmd.watchFor.trim().slice(0, 200); }
       if (reviewed) {
-        a.status = 'submitted'; move(p, 'Submitted', `${a.title}: ${cmd.repsDone}/${a.reps} sets · reply due ${shortWhen(dueBy)}`);
-        notify([p.coachId], 'new_submission', `${p.name} submitted ${a.title}. Reply by ${shortWhen(dueBy)}.`, `/coach/review/${p.id}`, p.id);
+        a.status = 'submitted'; move(p, 'Submitted', `${a.title}: ${cmd.repsDone}/${a.reps} sets${clip ? ` + ${Math.round(clip.durationSec)} s clip` : ''} · reply due ${shortWhen(dueBy)}`);
+        notify([p.coachId], 'new_submission', `${p.name} submitted ${a.title}${clip ? ' with a clip' : ''}. Reply by ${shortWhen(dueBy)}.`, `/coach/review/${p.id}`, p.id);
       } else {
         a.status = 'logged'; move(p, 'Next step ready', `${a.title}: logged (this week’s ${allowed} review${allowed === 1 ? '' : 's'} used)`);
         notify(famUsers(p), 'feedback_ready', `Logged ${a.title}. You’ve used this week’s ${allowed} review${allowed === 1 ? '' : 's'} on ${p.tier}; your coach still sees it. Next rep is unlocked.`, '/app', p.id);
@@ -166,10 +180,12 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const f = { wentWell: (cmd.wentWell ?? '').trim(), adjust: (cmd.adjust ?? '').trim(), why: (cmd.why ?? '').trim() };
       if (f.wentWell.length < 3 || f.adjust.length < 3) throw new WorkflowError('Feedback needs what went well and one adjustment.'); if (f.why.length < 3) throw new WorkflowError('Add one line on why.');
       if (!isUrl(cmd.linkUrl)) throw new WorkflowError('Links must start with http:// or https://');
+      const notes = (cmd.notes ?? []).map((n) => ({ t: Math.max(0, Math.round(Number(n.t) * 10) / 10), text: String(n.text ?? '').trim().slice(0, 140) })).filter((n) => n.text && Number.isFinite(n.t)).sort((x, y) => x.t - y.t).slice(0, 12);
+      if (notes.length && !sub.clipId) throw new WorkflowError('Timestamp notes need a clip.');
       const a = s.assignments.find((x) => x.id === sub.assignmentId); const nq = playerAssignments(s, p.id).find((x) => x.status === 'queued');
       const nextRep = cmd.decision === 'retry' ? `${a?.title} again, with the adjustment` : nq ? nq.title : 'Cycle wrap-up and review';
       const needsSignoff = actor.role === 'assistant' && s.settings.requireSignoff;
-      s.reviews.push({ id: id('rev'), submissionId: sub.id, playerId: p.id, decision: cmd.decision, ...f, nextRep, linkUrl: cmd.linkUrl?.trim() || null, feedback: composeFeedback(p, { ...f, nextRep }), reaction: null, at, reviewerId: actor.id, status: needsSignoff ? 'pending_signoff' : 'final' });
+      s.reviews.push({ id: id('rev'), submissionId: sub.id, playerId: p.id, decision: cmd.decision, ...f, nextRep, linkUrl: cmd.linkUrl?.trim() || null, feedback: composeFeedback(p, { ...f, nextRep }) + (notes.length ? `\n${notes.map((n) => `${fmtT(n.t)} ${n.text}`).join('\n')}` : ''), notes, secondsSpent: cmd.secondsSpent && cmd.secondsSpent > 0 ? Math.round(Math.min(cmd.secondsSpent, 3600)) : null, reaction: null, at, reviewerId: actor.id, status: needsSignoff ? 'pending_signoff' : 'final' });
       if (needsSignoff) { move(p, 'Sign-off', `${userName(s, actor.id)} reviewed (${cmd.decision}); awaiting head-coach sign-off`); notify([head()], 'signoff_needed', `Sign-off needed: ${userName(s, actor.id)} reviewed ${p.name}.`, `/coach/review/${p.id}`, p.id); }
       else applyReview(p, cmd.decision, s.reviews[s.reviews.length - 1].feedback, actor.id); break;
     }
@@ -178,16 +194,11 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const edited = !!cmd.edit && Object.values(cmd.edit).some((v) => v?.trim());
       r.signedOffBy = actor.id; r.signedOffAt = at; r.status = 'final'; if (edited) { for (const k of ['wentWell', 'adjust', 'why'] as const) if (cmd.edit?.[k]?.trim()) r[k] = cmd.edit[k]!.trim(); } if (!cmd.approve) r.decision = r.decision === 'approve' ? 'retry' : 'approve';
       if (!cmd.approve) { const a = s.assignments.find((x) => x.id === s.submissions.find((y) => y.id === r.submissionId)?.assignmentId); const nq = playerAssignments(s, p.id).find((x) => x.status === 'queued'); r.nextRep = r.decision === 'retry' ? `${a?.title} again, with the adjustment` : nq ? nq.title : 'Cycle wrap-up and review'; }
-      r.feedback = composeFeedback(p, r);
+      r.feedback = composeFeedback(p, r) + (r.notes?.length ? `\n${r.notes.map((n) => `${fmtT(n.t)} ${n.text}`).join('\n')}` : '');
       log('signoff', `Head coach signed off ${userName(s, r.reviewerId)}’s review${cmd.approve ? '' : ' (decision changed)'}${edited ? ' with edits' : ''}`, p.id);
       applyReview(p, r.decision, r.feedback, r.reviewerId); notify([r.reviewerId], 'feedback_ready', `Your review of ${p.name} was signed off.`, `/coach/player/${p.id}`, p.id); break;
     }
-    case 'startNext': {
-      const p = P(cmd.playerId); guard(p); const cy = playerCycle(s, p.id); const ended = !!cy && new Date(cy.endAt) < t; const q = ended ? undefined : playerAssignments(s, p.id).find((a) => a.status === 'queued');
-      if (q) { q.status = 'open'; move(p, 'Work ready', `Unlocked: ${q.title}`); }
-      else { const c = playerCycle(s, p.id); const b = progress(s, p.id).level; if (c) c.status = 'review'; move(p, 'Cycle review', `Cycle ${c?.index} complete`); milestone(p, `Cycle ${c?.index} complete`); levelCheck(p, b); notify([p.coachId], 'cycle_review', `${p.name} finished cycle ${c?.index}. Do the cycle review.`, `/coach/cycle/${p.id}`, p.id); notify(famUsers(p), 'cycle_review', `Cycle ${c?.index} done! Tell your coach what improved.`, '/app/develop#cycle', p.id); }
-      break;
-    }
+    case 'startNext': { const p = P(cmd.playerId); guard(p); startNext(p); break; }
     case 'pause': { const p = P(cmd.playerId); guard(p); p.pausedFrom = p.state; move(p, 'Paused', 'Paused'); break; }
     case 'resume': { const p = P(cmd.playerId); guard(p); const to = p.pausedFrom ?? 'Plan building'; p.pausedFrom = null; move(p, to, 'Resumed'); break; }
     case 'sendMessage': {
@@ -210,7 +221,9 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     }
     case 'reactFeedback': {
       const p = P(cmd.playerId); const r = s.reviews.find((x) => x.id === cmd.reviewId && x.playerId === p.id && x.status === 'final'); if (!r) throw new WorkflowError('Feedback not found.');
-      r.reaction = cmd.reaction; r.reactedAt = at; log('feedback', cmd.reaction === 'got_it' ? 'Got it 👍' : 'Question ❓', p.id);
+      if (r.reaction === 'got_it' && cmd.reaction === 'got_it') break;
+      r.reaction = cmd.reaction; r.reactedAt = at; log('feedback', cmd.reaction === 'got_it' ? `Committed: “${r.adjust.slice(0, 60)}” → ${r.nextRep}` : 'Question ❓', p.id);
+      if (cmd.reaction === 'got_it') { const latest = lastReview(s, p.id); if (latest?.id === r.id && p.state === 'Next step ready') startNext(p); }
       if (cmd.reaction === 'question') { const q = (cmd.question ?? '').trim(); if (q.length < 3) throw new WorkflowError('Type your question.'); const from = actor.role === 'parent' ? 'parent' : 'player'; addMessage(p, from, 'feedback', q, r.id); notify([r.reviewerId === p.coachId ? p.coachId : p.coachId], 'question', `${userName(s, actor.id)} has a question on your feedback: “${q.slice(0, 60)}”`, `/coach/player/${p.id}?tab=messages`, p.id); }
       break;
     }
@@ -237,6 +250,20 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       c.adjustedAt = at; addMessage(p, 'coach', 'rep', `Plan adjusted: ${cmd.note.trim()}`, c.id); log('plan', `Plan adjusted: ${cmd.note.trim().slice(0, 60)}`, p.id); notify(famUsers(p), 'plan_published', `Plan adjusted: ${cmd.note.trim().slice(0, 60)}`, '/app', p.id); break;
     }
     case 'approveDigests': { for (const it of cmd.items) { const r = dispatch(s, { type: 'approveDigest', playerId: it.playerId, text: it.text }, actor); Object.assign(s, r.snapshot); } break; }
+    case 'registerClip': {
+      const p = P(cmd.playerId); const err = clipError({ mime: cmd.mime, bytes: cmd.bytes, durationSec: cmd.durationSec }); if (err) throw new WorkflowError(err);
+      if (!videoConsent(p)) throw new WorkflowError(`${first(p.name)} is under 13: a parent needs to OK clips (updated consent) first.`);
+      if (s.clips.some((c) => c.id === cmd.clipId)) throw new WorkflowError('Clip already registered.');
+      s.clips.push({ id: cmd.clipId, playerId: p.id, assignmentId: openAssignment(s, p.id)?.id ?? null, submissionId: null, storageKey: cmd.storageKey, mime: cmd.mime, bytes: cmd.bytes, durationSec: Math.round(cmd.durationSec * 100) / 100, watchFor: (cmd.watchFor ?? '').trim().slice(0, 200), uploadedBy: actor.id, at, deleteAfter: new Date(t.getTime() + CLIP_RETENTION_DAYS * 864e5).toISOString(), deletedAt: null });
+      log('clip', `Clip added (${Math.round(cmd.durationSec)} s)`, p.id); break;
+    }
+    case 'deleteClip': {
+      const p = P(cmd.playerId); const c = s.clips.find((x) => x.id === cmd.clipId && x.playerId === p.id); if (!c) throw new WorkflowError('Clip not found.');
+      if (actor.role === 'assistant' && p.coachId !== actor.id) throw new WorkflowError('Player is assigned to another coach');
+      s.clips = s.clips.filter((x) => x !== c); log('clip', `Clip deleted on request by ${actor.role}`, p.id); break;
+    }
+    case 'setWorkingOn': { const p = P(cmd.playerId); const txt = cmd.text.trim(); if (txt.length < 3) throw new WorkflowError('One sentence, in your words.'); p.workingOn = txt.slice(0, 160); p.workingOnWeek = weekKey(t); log('profile', `Working on: “${p.workingOn.slice(0, 60)}”`, p.id); break; }
+    case 'saveDrillFeedback': { const dr = s.drills.find((x) => x.id === cmd.drillId); if (!dr) throw new WorkflowError('Unknown drill'); const f = cmd.fbTemplate; dr.fbTemplate = { wentWell: f.wentWell.trim(), adjust: f.adjust.trim(), why: f.why.trim() }; log('library', `Feedback template saved for “${dr.title}”`); break; }
     case 'updateCanvas': { P(cmd.playerId).canvas = cmd.canvas; break; }
     case 'rateSkill': { const p = P(cmd.playerId); p.rubric = { ...p.rubric, [cmd.skill]: Math.max(1, Math.min(5, cmd.value)) }; log('rubric', `${cmd.skill} → ${cmd.value}/5`, p.id); break; }
     case 'approveDigest': {
@@ -284,7 +311,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const r = s.dataRequests.find((x) => x.id === cmd.requestId); if (!r || r.status !== 'open') throw new WorkflowError('Request not found.'); r.status = 'done'; r.doneAt = at;
       if (r.kind === 'delete') {
         const pid = r.playerId; const keep = <T extends { playerId?: string | null }>(xs: T[]) => xs.filter((x) => x.playerId !== pid);
-        Object.assign(s, { players: s.players.filter((p) => p.id !== pid), applications: keep(s.applications), invites: keep(s.invites), consents: keep(s.consents), cycles: keep(s.cycles), assignments: keep(s.assignments), submissions: keep(s.submissions), reviews: keep(s.reviews), messages: keep(s.messages), reflections: keep(s.reflections), cycleReviews: keep(s.cycleReviews), habits: keep(s.habits), milestones: keep(s.milestones), digests: keep(s.digests), meetings: keep(s.meetings), notifications: keep(s.notifications) });
+        Object.assign(s, { players: s.players.filter((p) => p.id !== pid), applications: keep(s.applications), invites: keep(s.invites), consents: keep(s.consents), cycles: keep(s.cycles), assignments: keep(s.assignments), submissions: keep(s.submissions), reviews: keep(s.reviews), messages: keep(s.messages), reflections: keep(s.reflections), cycleReviews: keep(s.cycleReviews), clips: keep(s.clips), habits: keep(s.habits), milestones: keep(s.milestones), digests: keep(s.digests), meetings: keep(s.meetings), notifications: keep(s.notifications) });
         s.users = s.users.map((u) => (u.playerId === pid ? { ...u, active: false, name: 'Deleted player', username: null, playerId: null } : u));
         s.events = s.events.map((e) => (e.playerId === pid ? { ...e, detail: '[deleted]' } : e)); log('privacy', 'Player data deleted on request', pid);
       } else log('privacy', 'Export delivered', r.playerId); break;
@@ -304,6 +331,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
   }
   s.version++; s.events = [...s.events, ...events];
   return { snapshot: s, events, created };
+  function videoConsent(p: Player) { return p.age >= 13 || s.consents.some((c) => c.playerId === p.id && c.version >= '2026-10b'); }
   function family(p: Player) { return s.families.find((f) => f.id === p.familyId)!; }
   function cycleReviewFor(p: Player, cycleId: string) { let cr = s.cycleReviews.find((x) => x.cycleId === cycleId); if (!cr) { cr = { id: id('cr'), cycleId, playerId: p.id }; s.cycleReviews.push(cr); } return cr; }
   /** One message builder for every thread: context + refId, reply-by from tier window (urgent: office-hours clock), answering the thread when the coach replies. */

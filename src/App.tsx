@@ -89,7 +89,7 @@ export default function App() {
     <>
       <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
       {mode === 'demo' && <DemoBar />}<ErrorBar />
-      {!s || !ready ? <main id="main" className="loading">{error ? 'Could not reach the API.' : 'Loading…'}</main> : (
+      {!s || !ready ? <main id="main" className="loading">{error ? <><p>Couldn’t reach the server. Check your connection, then try again.</p><button className="btn" onClick={() => refresh()}>Try again</button></> : 'Loading…'}</main> : (
         <Routes>
           <Route path="/" element={<Home />} /><Route path="/how" element={<How />} /><Route path="/apply" element={<Apply />} /><Route path="/login" element={<Login />} /><Route path="/forgot" element={<Forgot />} /><Route path="/reset" element={<Reset />} /><Route path="/invite" element={<Invite />} />
           <Route path="/welcome" element={<Need roles={['parent']}><Welcome /></Need>} /><Route path="/inbox" element={<Need roles={['parent', 'player']}><FamilyInbox /></Need>} />

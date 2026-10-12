@@ -6,3 +6,4 @@ dist-live
 server/*.sqlite
 .wrangler
 .dev.vars
+server/clips/

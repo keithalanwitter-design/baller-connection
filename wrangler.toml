@@ -1,4 +1,4 @@
-# Baller Connection v3: Worker API + static app + D1 + cron. See DEPLOY.md.
+# Baller Connection v5: Worker API + static app + D1 + cron. See DEPLOY.md.
 name = "baller-connection"
 main = "server/worker.ts"
 compatibility_date = "2026-10-01"
@@ -22,6 +22,12 @@ binding = "DB"
 database_name = "baller-connection"
 database_id = "REPLACE_WITH_ID_FROM_wrangler_d1_create"
 migrations_dir = "server/migrations"
+
+# v5 practice clips (≤30 s, ≤50 MB). Create once: npx wrangler r2 bucket create baller-connection-clips
+# Keep the bucket private (no public access / r2.dev URL): clips are only served through /api/clips/:id after an access check.
+[[r2_buckets]]
+binding = "CLIPS"
+bucket_name = "baller-connection-clips"
 
 [triggers]
 # every 15 min: SLA / overdue sweep + notification email digest. Sunday 23:00 UTC: weekly parent digests.

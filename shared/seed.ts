@@ -5,6 +5,7 @@ export const DEMO_USERS = { head: 'u_head', assistant: 'u_asst', ops: 'u_ops' };
 import { addBusinessDays, isoDay, weekKey } from './time';
 import { sha256 } from './sha256';
 import { composeFeedback } from './personal';
+/** Seeded demo clip (fictional, generated test pattern) served from the static app. */ export const DEMO_CLIP_KEY = 'demo/riley-catch-shoot.mp4';
 /** Demo-only plaintext (the stored invite holds hashes). */ export const DEMO_INVITE = { token: 'demo-theo-token', code: '246810' };
 
 /** Fictional demo data. Times are relative to `base` so the demo always looks current. */
@@ -35,12 +36,13 @@ export function seed(base = new Date()): Snapshot {
     ],
     drills: LIBRARY.map((l, i) => ({ id: `d${i + 1}`, ...l, tags: [['handles'], ['finishing'], ['shooting'], ['defense'], ['handles', 'shooting'], ['self-check']][i], createdBy: 'u_head', archived: false })),
     templates: [{ id: 't1', name: 'Weak-hand starter (4 wk)', focus: 'Weak-hand control under pressure', drillIds: ['d1', 'd2', 'd6'], createdBy: 'u_head' }, { id: 't2', name: 'Shooter’s rhythm', focus: 'Catch-and-shoot rhythm', drillIds: ['d3', 'd5'], createdBy: 'u_head' }],
-    consents: ['avery', 'riley', 'sam', 'nia'].map((pid) => ({ id: `cs_${pid}`, playerId: pid, guardianName: { avery: 'Dana Pine', riley: 'Chris Moss', sam: 'Jo Quill', nia: 'Ray Fable' }[pid]!, userId: `u_${{ avery: 'dana', riley: 'chris', sam: 'jo', nia: 'ray' }[pid]}`, version: '2026-10', text: 'Seeded consent', at: h(300) })),
+    consents: ['avery', 'riley', 'sam', 'nia'].map((pid) => ({ id: `cs_${pid}`, playerId: pid, guardianName: { avery: 'Dana Pine', riley: 'Chris Moss', sam: 'Jo Quill', nia: 'Ray Fable' }[pid]!, userId: `u_${{ avery: 'dana', riley: 'chris', sam: 'jo', nia: 'ray' }[pid]}`, version: '2026-10b', text: 'Seeded consent', at: h(300) })),
     meetings: [
       { id: 'mt1', playerId: 'riley', staffId: 'u_asst', at: new Date(base.getTime() + 26 * 36e5).toISOString(), minutes: 30, kind: 'live', note: 'Weekly live session', status: 'scheduled' },
       { id: 'mt2', playerId: 'avery', staffId: 'u_head', at: new Date(base.getTime() + 72 * 36e5).toISOString(), minutes: 20, kind: 'check-in', note: 'Monthly video check-in', status: 'scheduled' },
     ],
-    notifications: [], outbox: [], dataRequests: [], reflections: [{ id: 'rf_av', playerId: 'avery', week: weekKey(new Date(h(70))), text: 'Left hand felt less scary by Thursday. Still rushing on game speed.', feel: 4, at: h(70) }], cycleReviews: [],
+    notifications: [], outbox: [], dataRequests: [], clips: [{ id: 'clip_riley', playerId: 'riley', assignmentId: 'a_ri1', submissionId: 's_ri1', storageKey: DEMO_CLIP_KEY, mime: 'video/mp4', bytes: 258875, durationSec: 12, watchFor: 'My feet on the catch from the left wing', uploadedBy: 'u_riley', at: h(30), deleteAfter: new Date(new Date(h(30)).getTime() + 90 * 864e5).toISOString(), deletedAt: null }],
+    reflections: [{ id: 'rf_av', playerId: 'avery', week: weekKey(new Date(h(70))), text: 'Left hand felt less scary by Thursday. Still rushing on game speed.', feel: 4, at: h(70) }], cycleReviews: [],
     families: [
       { id: 'f_pine', parentName: 'Dana Pine', email: 'dana@demo.test' }, { id: 'f_moss', parentName: 'Chris Moss', email: 'chris@demo.test' },
       { id: 'f_quill', parentName: 'Jo Quill', email: 'jo@demo.test' }, { id: 'f_fable', parentName: 'Ray Fable', email: 'ray@demo.test' }, { id: 'f_banks', parentName: 'Morgan Banks', email: 'morgan@demo.test' },
@@ -67,7 +69,7 @@ export function seed(base = new Date()): Snapshot {
       { id: 's_av1', assignmentId: 'a_av1', playerId: 'avery', repsDone: 6, reflection: 'Lost it on the switch twice. Better when I stayed low.', at: h(120), dueBy: addBusinessDays(new Date(h(120)), 1).toISOString(), reviewed: true },
       { id: 's_av2', assignmentId: 'a_av2', playerId: 'avery', repsDone: 3, reflection: 'Kept bringing it back to my right hand.', at: h(60), dueBy: addBusinessDays(new Date(h(60)), 1).toISOString(), reviewed: true },
       // Riley's same-day SLA was missed (seeded) so the demo shows overdue escalation.
-      { id: 's_ri1', assignmentId: 'a_ri1', playerId: 'riley', repsDone: 5, reflection: 'Made 7/10 at four spots, stuck at 5/10 on the left wing. Feet felt late.', at: h(30), dueBy: h(3), reviewed: true },
+      { id: 's_ri1', assignmentId: 'a_ri1', playerId: 'riley', repsDone: 5, reflection: 'Made 7/10 at four spots, stuck at 5/10 on the left wing. Feet felt late.', clipId: 'clip_riley', at: h(30), dueBy: h(3), reviewed: true },
       { id: 's_ni1', assignmentId: 'a_ni1', playerId: 'nia', repsDone: 6, reflection: 'Eyes up the whole time on the last 3 sets.', at: h(150), dueBy: addBusinessDays(new Date(h(150)), 1).toISOString(), reviewed: true },
       { id: 's_ni2', assignmentId: 'a_ni2', playerId: 'nia', repsDone: 6, reflection: 'Hesitation worked better than the crossover.', at: h(30), dueBy: addBusinessDays(new Date(h(30)), 1).toISOString(), reviewed: true },
     ],

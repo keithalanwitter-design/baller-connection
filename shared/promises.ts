@@ -1,5 +1,6 @@
 import type { Player, Snapshot, Tier } from './domain';
 import { addBusinessDays, shortWhen, weekKey } from './time';
+import { CLIP_MAX_MB, CLIP_MAX_SEC, CLIP_RETENTION_DAYS } from './clips';
 import { capacity, clock, lastSubmission, playerCycle, unanswered } from './workflow';
 
 /**
@@ -37,7 +38,7 @@ export const PROMISES: ProgramPromise[] = [
     risk: (s, p) => { const sub = pendingSub(s, p); return sub && dueState(s, sub.dueBy) !== 'on-track' ? { what: `Reply to ${p.name}’s check-in`, dueBy: sub.dueBy } : null; },
   },
   {
-    id: 'reviews-per-week', text: 'Foundation: 1 written review a week. Development: up to 3 a week.', sources: ['Home pricing'], tiers: ['Foundation', 'Development'], kind: 'engine',
+    id: 'reviews-per-week', text: 'Foundation: 1 written review a week. Development: up to 3 a week. A check-in with a clip counts as one.', sources: ['Home pricing'], tiers: ['Foundation', 'Development'], kind: 'engine',
     rule: 'submitRep counts reviewed submissions this week against settings.reviewsPerWeek; extra check-ins are logged (no review owed) and the next rep unlocks.', familyScreen: 'Promise card (“1 of 3 reviews used this week”) + log confirmation', coachAlert: 'Only reviewed check-ins enter the queue, so the queue never holds more than the plan promises',
     status: (s, p) => (ACTIVE(p) ? on(`${reviewedThisWeek(s, p)} of ${reviewsAllowed(s, p)} review${reviewsAllowed(s, p) === 1 ? '' : 's'} used this week`) : null), risk: () => null,
   },
@@ -116,9 +117,27 @@ export const PROMISES: ProgramPromise[] = [
     status: (_s, p) => (p.state === 'Paused' ? ok('Paused. Nothing is due.') : null), risk: () => null,
   },
   {
-    id: 'links-only', text: 'Links only, no uploads or full game film.', sources: ['FAQ', 'Log rep'], tiers: ALL, kind: 'policy',
-    rule: 'submitRep and sendMessage only accept http(s) links; there is no upload endpoint.', familyScreen: 'Log rep form', coachAlert: 'None needed',
+    id: 'short-clips', text: `Short practice clips only: up to ${CLIP_MAX_SEC} seconds and ${CLIP_MAX_MB} MB (MP4, MOV or WebM), or a link. No full-game film breakdown.`, sources: ['FAQ', 'Log rep', 'How it works'], tiers: ALL, kind: 'engine',
+    rule: 'clipError() runs in the browser (video metadata) and again on the server, which reads the container duration (MP4/MOV mvhd, WebM Info) and rejects >30 s, >50 MB or other types before storing anything; registerClip re-checks. Links must be http(s).', familyScreen: 'Log rep form (limits + trim hint)', coachAlert: 'None needed: oversize clips never reach the queue',
     status: () => null, risk: () => null,
+  },
+  {
+    id: 'clip-reviewed', text: 'Every clip sent with a reviewed check-in is watched and answered by your coach within your reply window. Clips count toward your plan’s weekly reviews.', sources: ['Home pricing', 'Log rep', 'FAQ'], tiers: ALL, kind: 'engine',
+    rule: 'A clip rides on its submission: same reviewed/logged decision (reviewsPerWeek), same dueBy, same overdue escalation; review notes are timestamped to the clip.', familyScreen: 'Today (“Coach replies by …”) + promise card', coachAlert: 'Queue “Work ready” (clip opens inline in the review)',
+    status: (s, p) => { const sub = pendingSub(s, p); if (!sub?.clipId) return null; const st = dueState(s, sub.dueBy); return { state: st, label: `Your clip: reply by ${shortWhen(sub.dueBy)}` }; },
+    risk: () => null,
+  },
+  {
+    id: 'clip-privacy', text: `Clips are seen only by the player, their parent(s) and assigned coaches, never shared, and deleted after ${CLIP_RETENTION_DAYS} days or when you ask. Under 13: only with a parent’s OK.`, sources: ['Privacy', 'Log rep', 'Parent Account', 'Consent'], tiers: ALL, kind: 'engine',
+    rule: 'canSeeClip() gates scopeSnapshot and GET /api/clips/:id (404 otherwise; ops never sees clips); the bucket is private and every byte is served through the API; sweep removes clips past deleteAfter; deleteClip and data deletion remove the bytes; registerClip refuses under-13 players without the clip consent version.', familyScreen: 'Parent Account → Clips (auto-delete date + Delete clip)', coachAlert: 'None needed',
+    status: (s, p) => { const cs = (s.clips ?? []).filter((c) => c.playerId === p.id); if (!cs.length) return null; const next = cs.map((c) => c.deleteAfter).sort()[0]; return ok(`${cs.length} clip${cs.length === 1 ? '' : 's'} stored privately · next auto-delete ${shortWhen(next)}`); },
+    risk: () => null,
+  },
+  {
+    id: 'focus-confirm', text: 'After every review you get one focus for the week. If it isn’t confirmed in 48 hours, we check in gently.', sources: ['Today', 'How it works'], tiers: ALL, kind: 'engine',
+    rule: 'Feedback shows as “Your focus this week”; “Got it, I’ll do this” logs the commitment and unlocks the next rep; sweep nudges unconfirmed feedback after 48 h and raises a “Not confirmed” queue item.', familyScreen: 'Today → Your focus this week', coachAlert: 'Queue “Not confirmed” + ack status on every feedback',
+    status: (s, p) => { const r = s.reviews.filter((x) => x.playerId === p.id && x.status === 'final').sort((a, b) => b.at.localeCompare(a.at))[0]; if (!r || !ACTIVE(p)) return null; return r.reaction === 'got_it' ? ok(`Focus confirmed: “${r.adjust.slice(0, 48)}”`) : r.reaction === 'question' ? on('Question sent about this week’s focus') : { state: 'on-track', label: 'New focus waiting for your “Got it”' }; },
+    risk: () => null,
   },
   {
     id: 'one-cue', text: 'Every review gives one clear adjustment and the next rep.', sources: ['Home', 'How it works'], tiers: ALL, kind: 'engine',

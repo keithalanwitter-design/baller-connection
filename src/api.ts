@@ -1,16 +1,19 @@
 import type { BallerApi, Me } from '../shared/api';
-import type { Command, Snapshot } from '../shared/domain';
+import type { Clip, Command, Snapshot } from '../shared/domain';
 import { dispatch } from '../shared/engine';
 import { SYSTEM, type Actor } from '../shared/permissions';
 import { seed } from '../shared/seed';
 import { buildOpsQueue, buildQueue, teamLoad } from '../shared/workflow';
 
-const KEY = 'baller-connection-v4';
+const KEY = 'baller-connection-v5';
+/** Demo uploads: object URLs that live only in this tab (nothing leaves the browser). */
+const MEM = new Map<string, string>();
+const staticClip = (key: string) => `${import.meta.env.BASE_URL}${key}`;
 const DEMO_STAFF: Record<string, Me> = { head: { id: 'u_head', name: 'Coach [Your Name]', role: 'head' }, assistant: { id: 'u_asst', name: 'Jamie Reed', role: 'assistant' }, ops: { id: 'u_ops', name: 'Lee Hart', role: 'ops' } };
 /** Demo: the shared engine in the browser, persisted to localStorage. The demo bar picks who you are. */
 export class DemoApi implements BallerApi {
   readonly mode = 'demo' as const; private s: Snapshot;
-  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings?.reviewsPerWeek && s.reflections ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
+  constructor() { let s: Snapshot | null = null; try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { s = null; } this.s = s?.settings?.reviewsPerWeek && s.reflections && s.clips ? s : seed(); this.s = dispatch(this.s, { type: 'sweep' }, SYSTEM).snapshot; this.save(); }
   private save() { localStorage.setItem(KEY, JSON.stringify(this.s)); }
   /** Resolve the demo persona for a command: staff by role, family members by the player they act on. */
   actor(cmd: Command, as?: Me): Actor {
@@ -34,6 +37,11 @@ export class DemoApi implements BallerApi {
   }
   async post<T>(): Promise<T> { throw new Error('Not available in demo'); }
   url() { return ''; }
+  async uploadClip(playerId: string, file: Blob, meta: { durationSec: number; mime: string; watchFor: string }, as?: Me) {
+    const clipId = `clip_${Date.now().toString(36)}`; const r = await this.dispatch({ type: 'registerClip', playerId, clipId, storageKey: `mem:${clipId}`, mime: meta.mime, bytes: file.size, durationSec: meta.durationSec, watchFor: meta.watchFor }, as);
+    MEM.set(clipId, URL.createObjectURL(file)); return { clip: r.snapshot.clips.find((c) => c.id === clipId)!, snapshot: r.snapshot };
+  }
+  clipSrc(c: Clip) { return c.storageKey.startsWith('demo/') ? staticClip(c.storageKey) : MEM.get(c.id) ?? null; }
 }
 /** Live: the Worker / Node API with httpOnly session cookies. */
 export class HttpApi implements BallerApi {
@@ -53,6 +61,11 @@ export class HttpApi implements BallerApi {
   async resetPassword(token: string, password: string) { await this.req('/api/auth/reset-password', { token, password }); }
   get<T>(path: string) { return this.req<T>(path); } post<T>(path: string, body: unknown) { return this.req<T>(path, body); }
   url(path: string) { return this.base + path; }
+  async uploadClip(playerId: string, file: Blob, meta: { durationSec: number; mime: string; watchFor: string }) {
+    const r = await fetch(this.base + '/api/clips', { method: 'POST', credentials: 'include', headers: { 'content-type': meta.mime, 'x-player-id': playerId, 'x-watch-for': encodeURIComponent(meta.watchFor) }, body: file });
+    const j = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status }); return j as { clip: Clip; snapshot: Snapshot };
+  }
+  clipSrc(c: Clip) { return `${this.base}/api/clips/${c.id}`; }
 }
 /** Live mode when the build points at an API (VITE_API_URL, or "same-origin" when the Worker serves the app); `?demo=1` always forces the demo. */
 export function isDemo() { const q = new URLSearchParams(location.search); if (q.get('demo') === '1') sessionStorage.setItem('bc-demo', '1'); if (q.get('demo') === '0') sessionStorage.removeItem('bc-demo'); return sessionStorage.getItem('bc-demo') === '1' || !import.meta.env.VITE_API_URL; }

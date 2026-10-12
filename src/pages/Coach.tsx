@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Logo } from '../App';
 import { perspective, useSnap, useStore } from '../store';
-import { TIER_INFO, replyLabel, type Billing, type Drill, type OutboxEmail, type Player, type Settings, type Tier } from '../../shared/domain';
+import { TIER_INFO, replyLabel, type TimedNote, type Billing, type Drill, type OutboxEmail, type Player, type Settings, type Tier } from '../../shared/domain';
 import { relative, shortWhen, weekKey } from '../../shared/time';
 import { OPS_KINDS, QUEUE_KINDS, buildOpsQueue, buildQueue, capacity, clock, family, first, guide, lastSubmission, pendingReview, playerAssignments, playerCycle, progress, staff, teamLoad, tierReply, userName, type OpsKind, type QueueKind } from '../../shared/workflow';
 import { playerCsv, calendarIcs } from '../../server/export';
@@ -15,6 +15,8 @@ import { promiseRisks } from '../../shared/promises';
 import { sha256 } from '../../shared/sha256';
 import { DEMO_INVITE } from '../../shared/seed';
 import { lastReview, OWED } from '../../shared/workflow';
+import { ClipPlayer, NoteList, fmtSpent, useReviewTimer } from '../v5';
+import { fmtT } from '../../shared/clips';
 
 const k = (x: string) => x.split(' ')[0].toLowerCase().replace(/[^a-z]/g, '');
 const download = (name: string, text: string, type = 'text/csv') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); };
@@ -45,6 +47,7 @@ function ActionCenter() {
     {next && <Link className="nextbar" to={next.to}><span className="kicker">Next up · press N</span><b>{next.player.name}: {next.kind}</b><span className="small">{next.what}</span><span className="btn sm">Open →</span></Link>}
     {isHead && safeSign.length > 1 && <button className="btn sm ghost" onClick={async () => { for (const x of safeSign) await run({ type: 'signOff', playerId: x.player.id, approve: true }); }}>Sign off all {safeSign.length} approvals as written</button>}
     <WeekRhythm role="coach" />
+    {(() => { const wk = weekKey(t); const mine = s.reviews.filter((r) => r.reviewerId === as?.id && r.secondsSpent && weekKey(new Date(r.at)) === wk); const avg = mine.length ? Math.round(mine.reduce((x, r) => x + (r.secondsSpent ?? 0), 0) / mine.length) : 0; return mine.length ? <p className="small dim" id="avgtime">⏱ Your reviews this week: {mine.length}, average {fmtSpent(avg)} (target under 5:00).</p> : null; })()}
     <div className="row gap wrapx">
       {isHead && <div className="seg light" role="group" aria-label="Whose queue"><button aria-pressed={scope === 'mine'} className={scope === 'mine' ? 'on' : ''} onClick={() => setScope('mine')}>Mine</button><button aria-pressed={scope === 'all'} className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>Whole team</button></div>}
       <div className="chips" role="group" aria-label="Filter queue">
@@ -72,47 +75,70 @@ function Review() {
   const { id } = useParams(); const s = useSnap(); const { run, as } = useStore(); const nav = useNavigate();
   const p = s.players.find((x) => x.id === id); const sub = p && lastSubmission(s, p.id); const a = sub && s.assignments.find((x) => x.id === sub.assignmentId);
   const pend = p && pendingReview(s, p.id); const [f, setF] = useState({ wentWell: '', adjust: '', why: '', linkUrl: '' }); const [edit, setEdit] = useState<{ wentWell?: string; adjust?: string; why?: string }>({});
-  const next = useNextItem(p ? undefined : undefined); const [focused, setFocused] = useState<'wentWell' | 'adjust' | 'why'>('adjust');
+  const next = useNextItem(); const [focused, setFocused] = useState<'wentWell' | 'adjust' | 'why'>('adjust'); const [notes, setNotes] = useState<TimedNote[]>([]); const [prefilled, setPrefilled] = useState('');
+  const vid = useRef<HTMLVideoElement | null>(null); const secs = useReviewTimer(sub?.id ?? '');
+  const drill = a?.drillId ? s.drills.find((x) => x.id === a.drillId) : undefined; const clip = sub?.clipId ? s.clips.find((c) => c.id === sub.clipId) : undefined;
+  const mine = s.reviews.filter((r) => r.reviewerId === as?.id && r.wentWell).sort((x, y) => y.at.localeCompare(x.at))[0];
+  // Prefill once per submission: the drill's saved template, else the player's current focus as the "why" anchor.
+  useEffect(() => { if (!sub || prefilled === sub.id) return; setPrefilled(sub.id); setNotes([]); const cy = p && playerCycle(s, p.id); if (drill?.fbTemplate) setF({ ...drill.fbTemplate, linkUrl: '' }); else setF({ wentWell: '', adjust: '', why: cy && p?.goal ? `It builds your focus (${cy.focus}) toward your goal: ${p.goal.toLowerCase()}.` : '', linkUrl: '' }); }, [sub?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ready = f.wentWell.trim().length >= 3 && f.adjust.trim().length >= 3 && f.why.trim().length >= 3;
+  const goNext = () => { const q = buildQueue(s, as?.id).filter((x) => OWED(x.kind) && x.player.id !== p?.id)[0]; nav(q ? q.to : '/coach'); };
+  const act = async (decision: 'approve' | 'retry') => { if (!p || !ready) return; if (await run({ type: 'review', playerId: p.id, decision, wentWell: f.wentWell, adjust: f.adjust, why: f.why, linkUrl: f.linkUrl.trim() || undefined, notes: notes.filter((n) => n.text.trim()), secondsSpent: secs, rev: p.rev })) goNext(); };
+  // Keyboard: J/K frame step (outside text fields), ⌘/Ctrl+Enter approve, ⌘/Ctrl+Shift+Enter another attempt. N (next item) is global.
+  useEffect(() => { const h = (e: KeyboardEvent) => { const el = e.target as HTMLElement; const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && p?.state !== 'Sign-off') { e.preventDefault(); act(e.shiftKey ? 'retry' : 'approve'); return; }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return; const v = vid.current; if (!v) return; const k = e.key.toLowerCase();
+    if (k === 'j' || k === 'k') { e.preventDefault(); v.pause(); v.currentTime = Math.max(0, v.currentTime + (k === 'j' ? -1 : 1) / 30); } };
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); });
   if (!p || !sub || !a || !['Submitted', 'Feedback due', 'Sign-off'].includes(p.state)) return <div className="panel"><h2 className="display">Nothing to review</h2><p>This work was already reviewed.</p><div className="row gap">{next && <Link className="btn" to={next.to}>Next: {next.player.name} · {next.kind} →</Link>}<Link className="btn ghost" to="/coach">Action Center</Link></div></div>;
   const queued = playerAssignments(s, p.id).filter((x) => x.status === 'queued'); const late = new Date(sub.dueBy) < clock(s); const tpl = feedbackTemplate(p); const prev = lastReview(s, p.id); const cyc = playerCycle(s, p.id);
-  const goNext = () => { const q = buildQueue(s, as?.id).filter((x) => OWED(x.kind) && x.player.id !== p.id)[0]; nav(q ? q.to : '/coach'); };
-  const act = async (decision: 'approve' | 'retry') => { if (await run({ type: 'review', playerId: p.id, decision, ...f, linkUrl: f.linkUrl.trim() || undefined, rev: p.rev })) goNext(); };
   const sign = async (approve: boolean) => { if (await run({ type: 'signOff', playerId: p.id, approve, edit, rev: p.rev })) goNext(); };
-  const signoffRule = s.settings.requireSignoff && as?.role === 'assistant'; const ready = f.wentWell.trim().length >= 3 && f.adjust.trim().length >= 3 && f.why.trim().length >= 3;
-  const cues = [...new Set([...a.cues, ...(cyc ? [`Focus: ${cyc.focus}`] : [])])];
+  const signoffRule = s.settings.requireSignoff && as?.role === 'assistant';
+  const cues = [...new Set([...a.cues, ...(cyc ? [`Focus: ${cyc.focus}`] : []), ...(prev?.adjust ? [`Last time: ${prev.adjust}`] : [])])];
   const LABEL = { wentWell: 'What they did well', adjust: 'One adjustment', why: 'Why (tie it to their goal)' } as const;
+  const addNote = (t: number) => { setNotes((n) => [...n, { t, text: '' }].sort((x, y) => x.t - y.t)); setTimeout(() => (document.querySelector('.tnote-edit input:placeholder-shown') as HTMLInputElement | null)?.focus(), 30); };
   return (
-    <div className="review">
+    <div className="review review5">
       <Back to="/coach">Action Center</Back>
-      <div className="row between wrapx"><h1 className="display">{p.state === 'Sign-off' ? 'Sign-off' : 'Review'}: {p.name}</h1><span className={`sla big ${late ? 'late' : ''}`}><b>{late ? 'OVERDUE' : 'Reply by'}</b>{shortWhen(sub.dueBy)}</span></div>
-      <p className="dim">Focus: {cyc?.focus} · {p.tier} (replies {tierReply(s, p)}) · Age {p.age} · Assigned to {userName(s, p.coachId)}</p>
-      <div className="grid2">
-        <section className="panel"><p className="kicker">Submitted {shortWhen(sub.at)}</p><h2 className="display">{a.title}</h2><p><b>{sub.repsDone}/{a.reps}</b> sets done</p><blockquote className="quote sm">“{sub.reflection}”</blockquote>{sub.linkUrl && <a className="attach" href={sub.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {sub.linkUrl}</a>}
-          {prev && <><p className="kicker">Previous feedback</p><FeedbackCard p={p} r={prev} me="coach" compact /></>}</section>
-        <section className="panel canvas"><p className="kicker">Who you’re coaching</p><p><b>In their words:</b> {coachKnows(p) || '—'}</p>{p.canvas && <><p className="kicker">Your canvas (coach only)</p><p>{p.canvas}</p></>}<p className="small dim">Learns by “{p.learnStyle}”: {tpl.label}.{p.age < 13 ? ' Under 13: short sentences, one idea.' : ''}</p></section>
-      </div>
-      {p.state === 'Sign-off' && pend ? (
-        <section className="panel signoff"><p className="kicker">{userName(s, pend.reviewerId)} · {shortWhen(pend.at)} · proposed: <b>{pend.decision === 'approve' ? 'Approve' : 'Another attempt'}</b></p>
+      <div className="row between wrapx"><h1 className="display">{p.state === 'Sign-off' ? 'Sign-off' : 'Review'}: {p.name}</h1>
+        <div className="row gap"><span className={`rtimer ${secs > 300 ? 'over' : ''}`} aria-label="Time on this review" title="Target: under 5 minutes">⏱ {fmtSpent(secs) === '—' ? '0:00' : fmtSpent(secs)}<small> / 5:00</small></span><span className={`sla big ${late ? 'late' : ''}`}><b>{late ? 'OVERDUE' : 'Reply by'}</b>{shortWhen(sub.dueBy)}</span></div></div>
+      <p className="dim">Focus: {cyc?.focus} · {p.tier} (replies {tierReply(s, p)}) · Age {p.age} · Learns by “{p.learnStyle}”: {tpl.label}{p.age < 13 ? ' · under 13: short sentences, one idea' : ''}</p>
+      <div className="reviewgrid">
+        <section className="panel rv-left"><p className="kicker">Submitted {shortWhen(sub.at)} · {a.title} · <b>{sub.repsDone}/{a.reps}</b> sets</p>
+          {clip ? <ClipPlayer clip={clip} onNote={p.state === 'Sign-off' ? undefined : addNote} playerRef={vid} /> : sub.clipId ? <p className="small dim">🎥 Clip removed.</p> : <p className="small dim">No clip this time: reps and reflection only.</p>}
+          <blockquote className="quote sm">“{sub.reflection}”</blockquote>{sub.linkUrl && <a className="attach" href={sub.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {sub.linkUrl}</a>}
+          <p className="small"><b>In their words:</b> {coachKnows(p) || '—'}</p>{p.canvas && <p className="small dim"><b>Your canvas:</b> {p.canvas}</p>}
+          {prev && <details><summary className="small">Previous feedback ({shortWhen(prev.at)})</summary><FeedbackCard p={p} r={prev} me="coach" compact /></details>}
+        </section>
+        {p.state === 'Sign-off' && pend ? (
+        <section className="panel signoff"><p className="kicker">{userName(s, pend.reviewerId)} · {shortWhen(pend.at)} · proposed: <b>{pend.decision === 'approve' ? 'Approve' : 'Another attempt'}</b>{pend.secondsSpent ? ` · ⏱ ${fmtSpent(pend.secondsSpent)}` : ''}</p>
           {as?.role === 'head' ? <>
             {(['wentWell', 'adjust', 'why'] as const).map((k) => <div key={k}><label htmlFor={`ed-${k}`} className="strong">{LABEL[k]}</label><input id={`ed-${k}`} className="input" value={edit[k] ?? pend[k] ?? ''} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} /></div>)}
+            {pend.notes && pend.notes.length > 0 && <NoteList notes={pend.notes} />}
             <p className="small dim">Next rep: {pend.nextRep}</p>
             <div className="outcomes"><button className="outcome ok" onClick={() => sign(true)}><b>Sign off{Object.keys(edit).length ? ' with edits' : ''}</b><span>{first(p.name)} → {pend.decision === 'approve' ? 'Next step ready' : 'Work ready (another attempt)'}.</span></button>
               <button className="outcome retry" onClick={() => sign(false)}><b>Flip to {pend.decision === 'approve' ? 'Another attempt' : 'Approve'}</b><span>Overrides the assistant’s call. Logged.</span></button></div>
           </> : <><FeedbackCard p={p} r={pend} me="coach" compact /><p className="dim">Waiting for {userName(s, s.users.find((u) => u.role === 'head')?.id)} to sign off. The family sees “head coach checking it”.</p></>}
         </section>) : (
-      <section className="panel composer4">
-        <p className="kicker">Feedback · same four parts every time · {tpl.label}</p>
-        {tpl.order.map((k) => <div key={k}><label htmlFor={`f-${k}`} className="strong">{LABEL[k]}</label><input id={`f-${k}`} className="input" value={f[k]} onFocus={() => setFocused(k)} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={tpl.hint[k]} /></div>)}
-        <div className="row wrapx" aria-label="Quick-pick cues"><span className="small dim">Cues → {LABEL[focused].toLowerCase()}:</span>{cues.map((x) => <button key={x} className="chip" onClick={() => setF((v) => ({ ...v, [focused]: v[focused] ? `${v[focused]} ${x}` : x }))}>+ {x}</button>)}</div>
-        <p className="small"><b>Next rep (automatic):</b> {queued.length ? queued[0].title : 'Cycle wrap-up and review'} · or the same rep again if you pick Another attempt.</p>
-        <label htmlFor="f-link" className="small dim">Optional link (a demo clip hosted elsewhere)</label><input id="f-link" className="input" type="url" value={f.linkUrl} onChange={(e) => setF({ ...f, linkUrl: e.target.value })} placeholder="https://" />
-        {signoffRule && <p className="note">Your reviews go to the head coach for sign-off before {first(p.name)} sees them.</p>}
-        <div className="outcomes">
-          <button className="outcome ok" disabled={!ready} onClick={() => act('approve')}><b>Approve</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} → Next step ready. {queued.length ? `Unlocks: ${queued[0].title}` : 'Last rep → Cycle review.'}</span></button>
-          <button className="outcome retry" disabled={!ready} onClick={() => act('retry')}><b>Another attempt</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} → Work ready, same rep with your adjustment.</span></button>
-        </div>
-        <p className="small dim">After you send: the next item in your queue opens.</p>
-      </section>)}
+        <section className="panel composer4 rv-right">
+          <div className="row between wrapx"><p className="kicker">Feedback · same parts every time</p><span className="row gap">
+            {mine && <button type="button" id="reuse" className="chip" onClick={() => setF({ wentWell: mine.wentWell, adjust: mine.adjust, why: mine.why, linkUrl: '' })} title="Copy the structure of your last review, then edit">↺ Reuse last structure</button>}
+            {drill && <button type="button" id="savetpl" className="chip" disabled={!ready} onClick={() => run({ type: 'saveDrillFeedback', drillId: drill.id, fbTemplate: { wentWell: f.wentWell, adjust: f.adjust, why: f.why } })}>☆ Save as “{drill.title}” template</button>}</span></div>
+          {drill?.fbTemplate && <p className="small dim">Prefilled from your “{drill.title}” template. Edit to fit this rep.</p>}
+          {tpl.order.map((k) => <div key={k}><label htmlFor={`f-${k}`} className="strong">{LABEL[k]}</label><textarea rows={k === 'why' ? 2 : 1} id={`f-${k}`} className="input" value={f[k]} onFocus={() => setFocused(k)} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={tpl.hint[k]} /></div>)}
+          <div className="row wrapx" aria-label="Quick-pick cues"><span className="small dim">Tap a cue → {LABEL[focused].toLowerCase()}:</span>{cues.map((x) => <button key={x} type="button" className="chip" onClick={() => setF((v) => ({ ...v, [focused]: v[focused] ? `${v[focused]} ${x.replace(/^(Focus|Last time): /, '')}` : x.replace(/^(Focus|Last time): /, '') }))}>+ {x}</button>)}</div>
+          {clip && <div className="tnote-edit"><p className="strong small">Clip notes {notes.length ? `(${notes.length})` : ''}<span className="dim"> · pause and tap “📍 Note” on the clip</span></p>
+            {notes.map((n, i) => <div key={i} className="row gap"><button type="button" className="tstamp" onClick={() => { if (vid.current) { vid.current.currentTime = n.t; vid.current.pause(); } }}>{fmtT(n.t)}</button><input aria-label={`Note at ${fmtT(n.t)}`} className="input grow" value={n.text} placeholder="hips high on gather" onChange={(e) => setNotes(notes.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} /><button type="button" className="link small" aria-label="Remove note" onClick={() => setNotes(notes.filter((_, j) => j !== i))}>✕</button></div>)}</div>}
+          <p className="small"><b>Next rep (automatic):</b> {queued.length ? queued[0].title : 'Cycle wrap-up and review'} · or the same rep again if you pick Another attempt.</p>
+          <details className="small"><summary>Add a link (optional)</summary><label htmlFor="f-link" className="sr">Link</label><input id="f-link" className="input" type="url" value={f.linkUrl} onChange={(e) => setF({ ...f, linkUrl: e.target.value })} placeholder="https://" /></details>
+          {signoffRule && <p className="note">Your reviews go to the head coach for sign-off before {first(p.name)} sees them.</p>}
+          <div className="outcomes">
+            <button className="outcome ok" disabled={!ready} onClick={() => act('approve')}><b>Approve</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} confirms your focus → {queued.length ? `unlocks ${queued[0].title}` : 'cycle review'}. <kbd>⌘/Ctrl ↵</kbd></span></button>
+            <button className="outcome retry" disabled={!ready} onClick={() => act('retry')}><b>Another attempt</b><span>{signoffRule ? 'After sign-off: ' : ''}{first(p.name)} → same rep with your adjustment. <kbd>⌘/Ctrl ⇧ ↵</kbd></span></button>
+          </div>
+          <p className="small dim">Keys: <kbd>J</kbd>/<kbd>K</kbd> frame step · <kbd>N</kbd> next item. After you send, the next item opens.</p>
+        </section>)}
+      </div>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { Footer, SiteHeader } from '../App';
 import { TIERS } from '../../shared/domain';
 
 const PLANS = [
-  { name: 'Foundation' as const, tag: 'Build the habit', items: ['Personal plan with one focus', 'A weekly set of assigned reps', '1 written coach review per week', 'Daily habits, streaks and journey levels', 'Weekly parent summary'] },
+  { name: 'Foundation' as const, tag: 'Build the habit', items: ['Personal plan with one focus', 'A weekly set of assigned reps', '1 written coach review per week', 'Send a short practice clip (30 s) with a check-in', 'Daily habits, streaks and journey levels', 'Weekly parent summary'] },
   { name: 'Development' as const, tag: 'Most families', featured: true, items: ['Everything in Foundation', 'Up to 3 written reviews per week', 'Plan adjusted every 2 weeks', 'One 20-minute video check-in per month', 'Skill rubric updated every cycle'] },
   { name: 'Inner Circle' as const, tag: '4 spots total', items: ['Everything in Development', 'Weekly 30-minute live video session', 'Review on every submission', 'Pre-tournament game plan', 'Season goal review with parents'] },
 ];
@@ -13,7 +13,7 @@ const FAQ = [
   ['What ages?', 'Players 10–16 who can practice on their own 2+ days a week. Younger players are welcome if a parent helps them log.'],
   ['Why only 15 players?', 'Your coach reviews your check-ins personally, and the head coach checks any review an assistant writes. Past 15, replies slow down and plans stop being personal, so we cap it and keep a waitlist. The app enforces the cap.'],
   ['What happens if the coach is late?', 'Every submission has a reply-by time based on your plan. If it passes, it jumps to the top of the coach’s queue marked overdue, and you can see the deadline on your Today screen.'],
-  ['Do you review game film?', 'Not full game film. Players can describe a 60-second phone clip in a self-check rep and get a written response. Full film breakdown isn’t offered.'],
+  ['Do you review game film?', 'Not full game film. With a check-in, players can send one short practice clip (up to 30 seconds), and the coach answers with written feedback and time-stamped notes. Clips count toward your plan’s weekly reviews. Full film breakdown isn’t offered.'],
   ['Contracts?', 'None. Month to month. Pause anytime from the parent view and pick up exactly where you left off.'],
 ];
 const LOOP = [
@@ -69,7 +69,7 @@ export default function Home() {
           <div className="sb">
             <div className="sb-col before"><span className="kicker">Before</span><ul><li>10 drill videos saved, none finished</li><li>“Work on your left hand,” no plan</li><li>Camps that end on Sunday</li><li>Parents guessing if it’s working</li></ul></div>
             <div className="sb-vs" aria-hidden>VS</div>
-            <div className="sb-col after"><span className="kicker">After</span><ul><li>One focus for the next 2–4 weeks</li><li>One next rep, waiting on Today</li><li>Every check-in gets a reply by a set time</li><li>A Sunday summary parents read in a minute</li></ul></div>
+            <div className="sb-col after"><span className="kicker">After</span><ul><li>One focus for the next 2–4 weeks</li><li>One next rep, waiting on Today</li><li>Every reviewed check-in gets a reply by a set time</li><li>A Sunday summary parents read in a minute</li></ul></div>
           </div>
         </div></section>
 

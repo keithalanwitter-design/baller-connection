@@ -1,4 +1,4 @@
-# Baller Connection v4
+# Baller Connection v5
 
 **One focus. One next rep. A coach who answers.**
 
@@ -6,6 +6,13 @@ Keith Witter's virtual player-development program, rebuilt as a multi-user produ
 
 - **Live demo (GitHub Pages):** https://keithalanwitter-design.github.io/baller-connection/ This build runs the same engine in your browser on fictional data. The demo bar switches between **Player · Parent · Head coach · Assistant · Ops**.
 - **Real product:** the same app served by a Cloudflare Worker with D1, sessions and cron. See **[DEPLOY.md](DEPLOY.md)**.
+
+## What's new in v5
+- **Short clips**: a player or parent can attach one practice clip (≤30 s, ≤50 MB, MP4/MOV/WebM) to a check-in, from a file or the phone camera (`capture`). The browser reads the length from the video metadata and shows a trim hint if it's too long. The server checks it again from the container bytes (MP4/MOV `mvhd`, WebM `Info`) before storing anything. Storage: R2 (`CLIPS` binding) in the Worker, local disk (`CLIPS_DIR`) on Node, and an in-tab blob URL in the demo.
+- **Clip privacy**: only the player, their parent(s) and the coaches assigned to the player can see a clip. Ops and everyone else get a 404. Every byte goes through `GET /api/clips/:id` (Range supported; `private, no-store`). Clips are deleted after 90 days, on request, or with a data deletion. Under-13s need the updated parental consent (v2026-10b).
+- **One-screen review**: the clip is on the left (0.5×/1×, frame step, loop, tap-to-timestamp notes) and the structured form is on the right. The form is prefilled from the drill's template or the player's focus, with cue chips (drill + focus + last adjustment). It also has “Reuse last structure” and per-drill templates. Keys: J/K step a frame, N opens the next item, ⌘/Ctrl+Enter approves, ⌘/Ctrl+⇧+Enter asks for another attempt. A visible review timer targets under 5:00, and the time is saved on each review and averaged on the Action Center.
+- **Understand + confirm**: after each review the player sees one **Your focus this week** card: the adjustment, the next rep, and how much by when. Confirming is required. “Got it, I’ll do this” logs the commitment and puts the next rep on Today; “I have a question” opens a feedback thread and a Reply needed item. If nothing is confirmed after 48 h, the family gets one gentle nudge and the coach gets a **Not confirmed** queue item. Coaches see the confirmation status on every feedback. Today opens with **What I’m working on**, one sentence in the player's words each week.
+- **Ledger**: `links-only` is replaced by `short-clips`, `clip-reviewed` and `clip-privacy`, and `focus-confirm` is added (25 promises in total).
 
 ## What's new in v4
 - **Promise ledger**: every landing-page promise is in `shared/promises.ts`, enforced by one test each, and listed in [PROMISES.md](PROMISES.md) (`npx tsx scripts/gen-promises.ts`). Families see a "What you can count on" card. Promises at risk show up in the coach queue.
@@ -64,7 +71,7 @@ shared/  domain.ts (types, Command union) · engine.ts (dispatch) · workflow.ts
 server/  app.ts (HTTP handler: auth, endpoints, cron) · repo.ts (row-level diff writes + targeted queries) · schema.ts (column map)
          auth.ts (PBKDF2 hashes, HMAC session tokens, cookies) · email.ts (Log | Resend | Postmark) · export.ts (CSV, iCal)
          worker.ts (Cloudflare entry: fetch + scheduled + static assets) · node.ts + sqljs.ts (same handler on Node + SQLite for local dev/tests)
-         migrations/0001_init.sql · 0002_auth.sql · 0003_rate_limits.sql · 0004_v4.sql   (incremental, tracked in d1_migrations)
+         migrations/0001_init.sql · 0002_auth.sql · 0003_rate_limits.sql · 0004_v4.sql · 0005_v5_clips.sql   (incremental, tracked in d1_migrations)
 src/     React + Vite. api.ts: DemoApi (in-browser engine, demo only) | HttpApi (live, cookies). Pages: Coach.tsx (coach + ops shell), Auth.tsx, Welcome.tsx, Player.tsx, Parent.tsx, Inbox.tsx, Log.tsx
 ```
 **Schema.** 21 normalized tables with foreign keys (`DEFERRABLE INITIALLY DEFERRED`, `ON DELETE CASCADE` from players) and indexes on every lookup column: families, users, players, applications, invites, consents, cycles, drills, templates, assignments, submissions, reviews, messages, habits, milestones, digests, meetings, notifications, outbox, data_requests, events. Also settings/meta (key-value), credentials (password/PIN hashes), auth_sessions (HMAC'd token hashes), password_tokens and login_attempts. A write only upserts the rows that changed and deletes removed rows, in one atomic D1 batch.
@@ -72,7 +79,7 @@ src/     React + Vite. api.ts: DemoApi (in-browser engine, demo only) | HttpApi 
 **Auth.** Email + password for parents and staff. Username + PIN for players. PBKDF2-SHA256 (100k iterations). The session token lives only in an `HttpOnly; SameSite=Lax; Secure` cookie, and the DB stores `HMAC(SESSION_SECRET, token)`. Login is throttled to 5 failures per 15 min. Staff and owners set passwords from an emailed link. The provider is pluggable: swap `/api/auth/*` for an IdP and keep `Actor`.
 
 ## API (all JSON; cookie session)
-`POST /api/auth/login | logout | accept-invite | player-login | request-password | reset-password` · `GET /api/auth/me` · `POST /api/apply` (public) · `GET /api/snapshot` (role-scoped) · `POST /api/commands` (any `Command`, permission-checked) · `GET /api/queue | team | audit | outbox | notifications | calendar-link` · `GET /api/players/:id/export.csv` · `GET /api/calendar/:user/:sig.ics` · `POST /api/staff` · demo only (`DEMO=1`): `POST /api/demo/reset | sweep`.
+`POST /api/clips` (raw video body; headers `x-player-id`, optional `x-watch-for`; player/parent only; 413/415/422 on size/type/length) · `GET /api/clips/:id` (player, parent(s), assigned coaches; Range) · `POST /api/auth/login | logout | accept-invite | player-login | request-password | reset-password` · `GET /api/auth/me` · `POST /api/apply` (public) · `GET /api/snapshot` (role-scoped) · `POST /api/commands` (any `Command`, permission-checked) · `GET /api/queue | team | audit | outbox | notifications | calendar-link` · `GET /api/players/:id/export.csv` · `GET /api/calendar/:user/:sig.ics` · `POST /api/staff` · demo only (`DEMO=1`): `POST /api/demo/reset | sweep`.
 
 ## Run locally
 ```bash

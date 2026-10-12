@@ -1,4 +1,4 @@
-// Baller Connection domain model (v3). Shared by the browser demo engine, the API server and tests.
+// Baller Connection domain model (v5). Shared by the browser demo engine, the API server and tests.
 export type Tier = 'Foundation' | 'Development' | 'Inner Circle';
 /** Account roles. `system` is the cron/scheduler. */
 export type UserRole = 'head' | 'assistant' | 'ops' | 'parent' | 'player';
@@ -32,20 +32,24 @@ export interface Player {
   nextSession: string; coachId: string; billing: Billing;
   /** Optimistic-concurrency version: bumped on every state change. */ rev: number;
   frustration: string; proudOf: string; /** "Coach knows you": the player's own words, editable by the player. */ aboutMe: string; tournamentDate?: string | null;
+  /** “What I’m working on”: one sentence in the player’s words, renewed weekly. */ workingOn?: string | null; workingOnWeek?: string | null;
 }
 export interface Application { id: string; at: string; playerId: string; answers: Record<string, string>; tier: Tier; fit: 'fit' | 'waitlist' | 'notyet'; next: 'apply' | 'call' | 'waitlist' }
 export interface Invite { id: string; playerId: string; email: string; /** sha256 of the link token; plaintext only ever appears in the sent email */ tokenHash: string; codeHash: string; sentAt: string; expiresAt: string; createdBy: string; acceptedAt?: string | null; acceptedBy?: string | null; status: 'pending' | 'accepted' | 'expired' | 'revoked' }
 export interface Consent { id: string; playerId: string; guardianName: string; userId: string; version: string; text: string; at: string }
 export interface Cycle { id: string; playerId: string; index: number; focus: string; startAt: string; endAt: string; status: 'active' | 'review' | 'closed'; templateId?: string | null; /** last mid-cycle plan adjustment (promise: plan adjusted every 2 weeks) */ adjustedAt?: string | null }
-export interface Drill { id: string; title: string; reps: number; minutes: number; cues: string[]; tags: string[]; createdBy: string; archived: boolean }
+export interface Drill { id: string; title: string; reps: number; minutes: number; cues: string[]; tags: string[]; createdBy: string; archived: boolean; /** Coach’s reusable feedback starter for this drill. */ fbTemplate?: { wentWell: string; adjust: string; why: string } | null }
 export interface Template { id: string; name: string; focus: string; drillIds: string[]; createdBy: string }
 export interface Assignment {
   id: string; cycleId: string; playerId: string; drillId?: string | null; order: number; title: string; reps: number; minutes: number; cues: string[];
   status: 'queued' | 'open' | 'submitted' | 'approved' | 'retry' | 'logged';
 }
-export interface Submission { id: string; assignmentId: string; playerId: string; repsDone: number; reflection: string; linkUrl?: string | null; at: string; dueBy: string; /** false = over this week's review allowance: logged, no review owed */ reviewed: boolean }
+export interface Submission { id: string; assignmentId: string; playerId: string; repsDone: number; reflection: string; linkUrl?: string | null; /** v5 short clip (≤30 s) */ clipId?: string | null; at: string; dueBy: string; /** false = over this week's review allowance: logged, no review owed */ reviewed: boolean }
 /** One feedback format everywhere: what went well, one adjustment, why, the next rep (+ optional link). `feedback` is the composed plain text. */
-export interface Review { id: string; submissionId: string; playerId: string; decision: 'approve' | 'retry'; wentWell: string; adjust: string; why: string; nextRep: string; linkUrl?: string | null; feedback: string; reaction?: 'got_it' | 'question' | null; reactedAt?: string | null; at: string; reviewerId: string; status: 'final' | 'pending_signoff'; signedOffBy?: string | null; signedOffAt?: string | null }
+export interface Review { id: string; submissionId: string; playerId: string; decision: 'approve' | 'retry'; wentWell: string; adjust: string; why: string; nextRep: string; linkUrl?: string | null; feedback: string; reaction?: 'got_it' | 'question' | null; reactedAt?: string | null; /** v5: tap-to-timestamp notes on the clip */ notes?: TimedNote[] | null; /** coach time on this review */ secondsSpent?: number | null; /** gentle 48 h acknowledgment nudge sent */ nudgedAt?: string | null; at: string; reviewerId: string; status: 'final' | 'pending_signoff'; signedOffBy?: string | null; signedOffAt?: string | null }
+export interface TimedNote { t: number; text: string }
+/** A short practice clip. Visible to the player, their parent(s) and assigned coaches only; removed after 90 days or on request. */
+export interface Clip { id: string; playerId: string; assignmentId?: string | null; submissionId?: string | null; storageKey: string; mime: string; bytes: number; durationSec: number; watchFor: string; uploadedBy: string; at: string; deleteAfter: string; deletedAt?: string | null }
 export type MessageContext = 'general' | 'rep' | 'feedback' | 'schedule' | 'urgent' | 'gameplan';
 export interface Message { id: string; playerId: string; from: 'coach' | 'player' | 'parent'; authorId: string; context: MessageContext; /** assignment / review / meeting id the thread is about */ refId?: string | null; text: string; linkUrl?: string | null; at: string; dueBy?: string | null; answered: boolean; readBy: Record<string, string> }
 export interface Habit { id: string; playerId: string; date: string; key: string }
@@ -65,9 +69,9 @@ export interface Snapshot {
   users: User[]; families: Family[]; players: Player[]; applications: Application[]; invites: Invite[]; consents: Consent[];
   cycles: Cycle[]; drills: Drill[]; templates: Template[]; assignments: Assignment[]; submissions: Submission[]; reviews: Review[];
   messages: Message[]; habits: Habit[]; milestones: Milestone[]; digests: Digest[]; meetings: Meeting[];
-  notifications: Notification[]; outbox: OutboxEmail[]; dataRequests: DataRequest[]; reflections: Reflection[]; cycleReviews: CycleReview[]; events: DomainEvent[];
+  notifications: Notification[]; outbox: OutboxEmail[]; dataRequests: DataRequest[]; reflections: Reflection[]; cycleReviews: CycleReview[]; clips: Clip[]; events: DomainEvent[];
 }
-export const TABLES = ['users', 'families', 'players', 'applications', 'invites', 'consents', 'cycles', 'drills', 'templates', 'assignments', 'submissions', 'reviews', 'messages', 'habits', 'milestones', 'digests', 'meetings', 'notifications', 'outbox', 'dataRequests', 'reflections', 'cycleReviews', 'events'] as const;
+export const TABLES = ['users', 'families', 'players', 'applications', 'invites', 'consents', 'cycles', 'drills', 'templates', 'assignments', 'submissions', 'reviews', 'messages', 'habits', 'milestones', 'digests', 'meetings', 'notifications', 'outbox', 'dataRequests', 'reflections', 'cycleReviews', 'clips', 'events'] as const;
 export type TableName = (typeof TABLES)[number];
 
 export const TIER_INFO: Record<Tier, { price: number; reviewsPerWeek: string }> = {
@@ -79,8 +83,8 @@ export const TIERS: Record<Tier, { price: number; replyBizDays: number; replyLab
   Foundation: { price: 69, replyBizDays: 2, replyLabel: replyLabel(2) }, Development: { price: 139, replyBizDays: 1, replyLabel: replyLabel(1) }, 'Inner Circle': { price: 229, replyBizDays: 0, replyLabel: replyLabel(0) },
 };
 export const HABITS = ['Handles 10 min', 'Form shots 25', 'Sleep 9 h'];
-export const CONSENT_VERSION = '2026-10';
-export const CONSENT_TEXT = 'I am the parent or legal guardian of this player. I consent to Baller Connection storing the player’s name, age, goals, practice logs and messages to provide coaching, and to the coach contacting the player through the app. I can request an export or deletion at any time.';
+export const CONSENT_VERSION = '2026-10b';
+export const CONSENT_TEXT = 'I am the parent or legal guardian of this player. I consent to Baller Connection storing the player’s name, age, goals, practice logs, messages and short practice clips (30 seconds max, visible only to our family and the player’s assigned coaches, deleted after 90 days or when I ask) to provide coaching, and to the coach contacting the player through the app. I can request an export or deletion at any time.';
 
 export type Command =
   | { type: 'submitApplication'; playerName: string; parentName: string; email?: string; answers: Record<string, string>; next: Application['next'] }
@@ -98,8 +102,13 @@ export type Command =
   | { type: 'publishPlan'; playerId: string; focus: string; drillIds: string[]; templateId?: string; rev?: number }
   | { type: 'adjustPlan'; playerId: string; note: string; addDrillIds?: string[] }
   | { type: 'openPlan'; playerId: string }
-  | { type: 'submitRep'; playerId: string; repsDone: number; reflection: string; linkUrl?: string }
-  | { type: 'review'; playerId: string; decision: 'approve' | 'retry'; wentWell: string; adjust: string; why: string; linkUrl?: string; rev?: number }
+  | { type: 'submitRep'; playerId: string; repsDone: number; reflection: string; linkUrl?: string; clipId?: string; watchFor?: string }
+  /** Server-only (the upload endpoint runs it after checking the bytes); the browser demo runs it with the measured metadata. */
+  | { type: 'registerClip'; playerId: string; clipId: string; storageKey: string; mime: string; bytes: number; durationSec: number; watchFor?: string }
+  | { type: 'deleteClip'; playerId: string; clipId: string }
+  | { type: 'setWorkingOn'; playerId: string; text: string }
+  | { type: 'saveDrillFeedback'; drillId: string; fbTemplate: { wentWell: string; adjust: string; why: string } }
+  | { type: 'review'; playerId: string; decision: 'approve' | 'retry'; wentWell: string; adjust: string; why: string; linkUrl?: string; notes?: TimedNote[]; secondsSpent?: number; rev?: number }
   | { type: 'signOff'; playerId: string; approve: boolean; edit?: { wentWell?: string; adjust?: string; why?: string }; rev?: number }
   | { type: 'reactFeedback'; playerId: string; reviewId: string; reaction: 'got_it' | 'question'; question?: string }
   | { type: 'weeklyReflection'; playerId: string; text: string; feel: number }

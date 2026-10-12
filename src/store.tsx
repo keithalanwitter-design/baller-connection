@@ -6,7 +6,7 @@ import { makeApi } from './api';
 interface Ctx {
   s: Snapshot | null; mode: 'demo' | 'live'; api: BallerApi; me: Me | null; ready: boolean;
   /** Demo persona (live mode: the signed-in role). */ as: Me | null; setDemoRole: (r: UserRole) => void;
-  run: (c: Command) => Promise<DomainEvent[] | null>; reset: () => Promise<void>; refresh: () => Promise<void>; signIn: (login: string, secret: string, pin?: boolean) => Promise<Me | null>; signOut: () => Promise<void>;
+  run: (c: Command) => Promise<DomainEvent[] | null>; /** Upload a clip; returns its id (or null with the error shown). */ upload: (pid: string, f: Blob, meta: { durationSec: number; mime: string; watchFor: string }) => Promise<string | null>; reset: () => Promise<void>; refresh: () => Promise<void>; signIn: (login: string, secret: string, pin?: boolean) => Promise<Me | null>; signOut: () => Promise<void>;
   error: string | null; setError: (e: string | null) => void; last: { events: DomainEvent[]; cmd: Command; n: number; t: number } | null; clearError: () => void; dismiss: () => void;
 }
 const C = createContext<Ctx>(null as unknown as Ctx);
@@ -26,11 +26,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try { const r = await api.dispatch(cmd, as ?? undefined); setS(r.snapshot); setLast((l) => ({ events: r.events, cmd, n: (l?.n ?? 0) + 1, t: Date.now() })); setError(null); return r.events; }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); return null; }
   }, [api, as]);
+  const upload = useCallback(async (pid: string, f: Blob, meta: { durationSec: number; mime: string; watchFor: string }) => { try { const r = await api.uploadClip(pid, f, meta, as ?? undefined); setS(r.snapshot); setError(null); return r.clip.id; } catch (e) { setError((e as Error).message); return null; } }, [api, as]);
   const reset = useCallback(async () => { setS(await api.reset()); setLast(null); }, [api]);
   const signIn = useCallback(async (l: string, sec: string, pin?: boolean) => { try { const u = await api.login(l, sec, pin); await refresh(); setError(null); return u; } catch (e) { setError((e as Error).message); return null; } }, [api, refresh]);
   const signOut = useCallback(async () => { await api.logout(); setMe(null); await refresh(); }, [api, refresh]);
   const setDemoRole = useCallback((r: UserRole) => { localStorage.setItem('bc-demo-role', r); setDemoRoleState(r); }, []);
-  const v = useMemo(() => ({ s, mode: api.mode, api, me, ready, as, setDemoRole, run, reset, refresh, signIn, signOut, error, setError, last, clearError: () => setError(null), dismiss: () => setLast(null) }), [s, api, me, ready, as, setDemoRole, run, reset, refresh, signIn, signOut, error, last]);
+  const v = useMemo(() => ({ s, mode: api.mode, api, me, ready, as, setDemoRole, run, upload, reset, refresh, signIn, signOut, error, setError, last, clearError: () => setError(null), dismiss: () => setLast(null) }), [s, api, me, ready, as, setDemoRole, run, upload, reset, refresh, signIn, signOut, error, last]);
   return <C.Provider value={v}>{children}</C.Provider>;
 }
 // eslint-disable-next-line react-refresh/only-export-components

@@ -6,6 +6,7 @@ import { promiseCard } from '../shared/promises';
 import { inOffice, nextOpen, relative, shortWhen, weekKey } from '../shared/time';
 import { buildQueue, clock, family, first, playerCycle, tierReply, userName, OWED } from '../shared/workflow';
 import { useSnap, useStore } from './store';
+import { AckStatus, NoteList, SubmissionClip, fmtSpent } from './v5';
 
 /* ---------- shared words ---------- */
 export const STATUS_WORD = { kept: 'Kept', 'on-track': 'On track', 'at-risk': 'Being handled', missed: 'Late' } as const;
@@ -35,7 +36,7 @@ export function WeekRhythm({ role }: { role: 'player' | 'coach' }) {
 }
 
 /* ---------- unified feedback ---------- */
-export function FeedbackCard({ p, r, me, compact }: { p: Player; r: Review; me: 'player' | 'parent' | 'coach'; compact?: boolean }) {
+export function FeedbackCard({ p, r, me, compact, hideReact }: { p: Player; r: Review; me: 'player' | 'parent' | 'coach'; compact?: boolean; hideReact?: boolean }) {
   const s = useSnap(); const { run } = useStore(); const [ask, setAsk] = useState(false); const [q, setQ] = useState('');
   const thread = s.messages.filter((m) => m.context === 'feedback' && m.refId === r.id).sort((a, b) => a.at.localeCompare(b.at));
   const fam = me !== 'coach';
@@ -43,13 +44,15 @@ export function FeedbackCard({ p, r, me, compact }: { p: Player; r: Review; me: 
   return <article className={`fb ${compact ? 'compact' : ''}`} id={`fb-${r.id}`} data-review={r.id}>
     <header className="row between wrapx"><span className="kicker">{userName(s, r.reviewerId)} · {shortWhen(r.at)}{r.signedOffBy && r.signedOffBy !== r.reviewerId ? ` · checked by ${first(userName(s, r.signedOffBy))}` : ''}</span><span className={`pill st-${r.decision === 'approve' ? 'approved' : 'retry'}`}>{r.decision === 'approve' ? 'Approved' : 'Another attempt'}</span></header>
     {r.wentWell ? <dl className="fbgrid">{parts.map(([k, l, v]) => v && <div key={k} className={`fb-${k}`}><dt>{l}</dt><dd>{v}</dd></div>)}<div className="fb-next"><dt>Next rep</dt><dd>{r.nextRep}</dd></div></dl> : <blockquote className="quote sm">{r.feedback}</blockquote>}
+    {r.notes && r.notes.length > 0 && <NoteList notes={r.notes} />}
+    {me === 'coach' && <p className="row gap small"><AckStatus r={r} />{r.secondsSpent ? <span className="dim">⏱ {fmtSpent(r.secondsSpent)} to review</span> : null}</p>}
     {r.linkUrl && <a className="attach" href={r.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {r.linkUrl.replace(/^https?:\/\//, '').slice(0, 48)}</a>}
-    {fam && r.status === 'final' && <div className="react">
-      {r.reaction === 'got_it' ? <span className="small">👍 You said “got it”</span> : r.reaction === 'question' ? <span className="small">❓ Question sent{thread.some((m) => m.from === 'coach') ? ' · answered' : ` · reply ${thread.at(-1)?.dueBy ? `by ${shortWhen(thread.at(-1)!.dueBy!)}` : 'coming'}`}</span> : <>
-        <button className="react-b" onClick={() => run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'got_it' })}>👍 Got it</button>
-        <button className="react-b" aria-expanded={ask} onClick={() => setAsk(!ask)}>❓ Question</button></>}</div>}
+    {fam && !hideReact && r.status === 'final' && <div className="react">
+      {r.reaction === 'got_it' ? <span className="small">✓ Committed</span> : r.reaction === 'question' ? <span className="small">❓ Question sent{thread.some((m) => m.from === 'coach') ? ' · answered' : ` · reply ${thread.at(-1)?.dueBy ? `by ${shortWhen(thread.at(-1)!.dueBy!)}` : 'coming'}`}</span> : <>
+        <button className="react-b" onClick={() => run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'got_it' })}>Got it, I’ll do this</button>
+        <button className="react-b" aria-expanded={ask} onClick={() => setAsk(!ask)}>I have a question</button></>}</div>}
     {ask && <form className="row gap" onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'question', question: q })) { setAsk(false); setQ(''); } }}>
-      <label className="sr" htmlFor={`q-${r.id}`}>Your question</label><input id={`q-${r.id}`} autoFocus className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="What part is unclear?" /><button className="btn" disabled={q.trim().length < 3}>Ask</button></form>}
+      <label className="sr" htmlFor={`q-${r.id}`}>Your question</label><input id={`q-${r.id}`} autoFocus className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="What part is unclear?" /><button className="btn" disabled={q.trim().length < 3}>Send question</button></form>}
     {thread.length > 0 && !compact && <ul className="fbthread">{thread.map((m) => <li key={m.id} className={`from-${m.from}`}><b>{m.from === 'coach' ? first(userName(s, m.authorId)) : m.from === 'parent' ? family(s, p).parentName : first(p.name)}:</b> {m.text}</li>)}</ul>}
   </article>;
 }
@@ -57,7 +60,7 @@ export function FeedbackTimeline({ p, me }: { p: Player; me: 'player' | 'parent'
   const s = useSnap(); const subs = s.submissions.filter((x) => x.playerId === p.id).sort((a, b) => b.at.localeCompare(a.at));
   if (!subs.length) return <div className="empty"><b>No feedback yet.</b><p className="small">Log your first rep on Today. Your coach answers with what went well, one adjustment, why, and your next rep.</p></div>;
   return <ol className="tl">{subs.map((sub) => { const a = s.assignments.find((x) => x.id === sub.assignmentId); const r = s.reviews.find((x) => x.submissionId === sub.id && (x.status === 'final' || me === 'coach'));
-    return <li key={sub.id}><span className="tldot" aria-hidden /><div className="grow"><p className="row between wrapx"><b>{a?.title}</b><span className="small dim">{shortWhen(sub.at)} · {sub.repsDone}/{a?.reps} sets</span></p><p className="small">“{sub.reflection}”</p>
+    return <li key={sub.id}><span className="tldot" aria-hidden /><div className="grow"><p className="row between wrapx"><b>{a?.title}</b><span className="small dim">{shortWhen(sub.at)} · {sub.repsDone}/{a?.reps} sets</span></p><p className="small">“{sub.reflection}”</p>{sub.clipId && <SubmissionClip clipId={sub.clipId} />}
       {r ? <FeedbackCard p={p} r={r} me={me} compact={me === 'coach'} /> : sub.reviewed === false ? <p className="small dim">Logged, no review this week (your plan’s weekly reviews were used).</p> : <p className="small dim">Reply due {relative(sub.dueBy, clock(s))} ({shortWhen(sub.dueBy)})</p>}</div></li>; })}</ol>;
 }
 
@@ -97,7 +100,7 @@ export function CycleReviewPlayer({ p, me }: { p: Player; me: 'player' | 'parent
       <label htmlFor="ci">What improved?</label><input id="ci" className="input" value={f.improved} onChange={(e) => setF({ ...f, improved: e.target.value })} />
       <label htmlFor="ch">What was hardest?</label><input id="ch" className="input" value={f.hardest} onChange={(e) => setF({ ...f, hardest: e.target.value })} />
       <label htmlFor="cw">What do you want to work on next?</label><input id="cw" className="input" value={f.wantNext} onChange={(e) => setF({ ...f, wantNext: e.target.value })} />
-      <button className="btn lg" disabled={!f.improved.trim()}>Send to my coach</button></form>
+      <button className="btn lg" disabled={!f.improved.trim()}>Submit to coach</button></form>
       : cr ? <div className="crsum">{cr.playerAt && <p><b>{me === 'player' ? 'You' : first(p.name)}:</b> improved “{cr.improved}” · hardest “{cr.hardest}” · next “{cr.wantNext}”</p>}
         {cr.coachAt ? <><p><b>{userName(s, p.coachId)}:</b> {cr.summary}</p><p>Next focus: <b>{cr.nextFocus}</b></p><ul className="ratings">{Object.entries(cr.ratingsAfter ?? {}).map(([k, v]) => { const b = cr.ratingsBefore?.[k] ?? v; return <li key={k}>{k} <b>{b} → {v}</b>{v > b ? ' ▲' : ''}</li>; })}</ul></> : <p className="dim">Your coach is re-rating your skills and picking the next focus (within 2 business days).</p>}</div>
       : <div className="empty"><b>Every 4 weeks.</b><p className="small">{c ? `Cycle ${c.index} review on ${shortWhen(c.endAt)} (or after your last rep).` : 'Starts after your first plan.'} You’ll say what improved; your coach re-rates your skills and picks the next focus with you.</p></div>}
@@ -157,7 +160,7 @@ function ThreadView({ p, me, ms, onBack }: { p: Player; me: 'player' | 'parent' 
     <form className="composer" onSubmit={(e) => { e.preventDefault(); if (t.trim()) sendCtx(t.trim()); }}>
       <div className="row gap"><label className="sr" htmlFor="msg">Reply</label><input id="msg" className="input grow" value={t} onChange={(e) => setT(e.target.value)} placeholder="Write a reply" />
         <button type="button" className="chip" aria-pressed={showLink} onClick={() => setShowLink(!showLink)} title="Attach a link">🔗</button><button className="btn" disabled={!t.trim()}>Send</button></div>
-      {showLink && <input aria-label="Link URL" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://… (links only, no uploads)" />}</form></div>;
+      {showLink && <input aria-label="Link URL" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://… (links here; clips go with a check-in on Today)" />}</form></div>;
 }
 function NewThread({ p: p0, me, players, onSent }: { p: Player; me: 'player' | 'parent' | 'coach'; players: Player[]; onSent: (k: string) => void }) {
   const s = useSnap(); const { run } = useStore(); const [pid, setPid] = useState(p0.id); const p = players.find((x) => x.id === pid) ?? p0; const [t, setT] = useState('');

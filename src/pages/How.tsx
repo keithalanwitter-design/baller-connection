@@ -33,11 +33,13 @@ export default function How() {
       <div className="grid3">
         <div className="card"><h3>Reply-by SLAs</h3><p>Foundation: 2 business days · Development: 1 · Inner Circle: same business day. Weekends don’t count. Messages from families get the same window; parents can mark a message urgent (4 office hours).</p></div>
         <div className="card"><h3>Capacity</h3><p>15 players on the roster, 4 in Inner Circle. The engine refuses invites past the cap and moves the family to Waitlist.</p></div>
-        <div className="card"><h3>Coach queue</h3><p>One list: Reply needed → Sign-off → Work ready → Cycle review → Plan needed → Promise → Activation → Upcoming. Overdue items go first. Promise items appear before a promise is at risk.</p></div>
+        <div className="card"><h3>Coach queue</h3><p>One list: Reply needed → Sign-off → Work ready → Cycle review → Plan needed → Not confirmed → Promise → Activation → Upcoming. Overdue items go first. Promise items appear before a promise is at risk.</p></div>
       </div>
       <div className="grid3">
         <div className="card"><h3>Weekly rhythm</h3><p>Mon: plan drop · Wed: mid-week check-in · Fri: wrap and two-line reflection · Sun: parent summary. Notifications and the Today screen follow it.</p></div>
         <div className="card"><h3>Reviews per week</h3><p>Foundation 1 · Development up to 3 · Inner Circle every submission. Extra check-ins are logged and the next rep still unlocks.</p></div>
+        <div className="card"><h3>Short clips</h3><p>Optional with any check-in: one practice clip, up to 30 s and 50 MB. Your coach answers with the same structured feedback plus time-stamped notes. Private to your family and assigned coaches; deleted after 90 days.</p></div>
+        <div className="card"><h3>Your focus this week</h3><p>After each review, Today shows one adjustment, the next rep, and how much by when. Tap “Got it, I’ll do this” or ask a question. Unconfirmed after 48 h: a gentle nudge.</p></div>
         <div className="card"><h3>Promise ledger</h3><p>Every promise on this site maps to an engine rule, a family screen and a coach alert. See <code>PROMISES.md</code>.</p></div>
       </div>
       <div className="row gap"><Link className="btn" to="/log">Open the live system log</Link><Link className="btn ghost" to="/coach">See the coach queue</Link></div>

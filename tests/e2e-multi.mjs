@@ -10,7 +10,7 @@ async function persona(name, w = 1280) {
   pg.on('pageerror', (e) => errs.push(`${name}: ${e.message}`)); pg.on('dialog', (d) => d.accept());
   const go = async (h) => { await pg.goto(B + '#' + h); await pg.waitForTimeout(450); };
   const shot = (n, full = true) => pg.screenshot({ path: `shots/${n}.png`, fullPage: full });
-  const gotIt = async () => { await pg.waitForTimeout(250); const g = pg.getByRole('button', { name: 'Got it' }); if (await g.count()) await g.click(); };
+  const gotIt = async () => { await pg.waitForTimeout(250); const g = pg.getByRole('button', { name: 'Got it', exact: true }); if (await g.count()) await g.click(); };
   const api = (path) => pg.evaluate((p) => fetch(p, { credentials: 'include' }).then((r) => r.json()), path);
   const login = async (id, secret, pin = false) => { await go('/login'); if (pin) await pg.getByRole('tab', { name: 'Player' }).click(); await pg.fill('#lg', id); await pg.fill('#pw', secret); await pg.getByRole('button', { name: 'Sign in' }).click(); await pg.waitForTimeout(700); };
   return { ctx, pg, go, shot, gotIt, api, login };
@@ -67,11 +67,14 @@ await asst.pg.getByRole('button', { name: 'Publish plan' }).click(); await asst.
 const player = await persona('player', 430); await player.login('kai.rook', '4321', true); ok(/#\/app/.test(player.pg.url()), 'player signs in with username + PIN');
 await player.pg.getByRole('button', { name: /Read my focus/ }).click(); await player.gotIt();
 for (let i = 1; i <= 3; i++) await player.pg.getByRole('button', { name: `Set ${i}`, exact: true }).click();
-await player.pg.fill('#refl', 'Left hand felt better by set three.'); await player.pg.fill('#rlink', 'https://example.com/my-clip');
+await player.pg.fill('#refl', 'Left hand felt better by set three.'); await player.pg.setInputFiles('#clipfile', 'tests/fixtures/short-5s.mov'); await player.pg.locator('.clipchosen').waitFor(); await player.pg.fill('#watch', 'Left-hand finish');
 await player.pg.getByRole('button', { name: 'Submit to coach' }).click(); await player.gotIt(); ok(await player.pg.locator('.sla-clock').count() === 1, 'player sees reply-by clock after submitting');
+ok((await player.api('/api/snapshot')).snapshot.clips.some((c) => c.watchFor === 'Left-hand finish' && c.mime === 'video/quicktime' && Math.round(c.durationSec) === 5), 'live: clip uploaded through the API (server read 5 s from the MOV container)');
+{ const cid = (await player.api('/api/snapshot')).snapshot.clips.at(-1).id; ok((await ops.api(`/api/clips/${cid}`)).error, 'live: ops is refused the clip'); }
 
 // 6 · Assistant reviews → Sign-off (family can’t see it yet)
 await asst.go('/coach'); await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Work ready' }).click(); await asst.pg.waitForTimeout(300);
+await asst.pg.locator('.clipplayer video').waitFor(); await asst.pg.waitForFunction(() => document.querySelector('.clipplayer video')?.readyState >= 1, null, { timeout: 10000 }); ok(true, 'live: assigned coach streams the clip from /api/clips'); await asst.pg.evaluate(() => { document.querySelector('.clipplayer video').currentTime = 3; }); await asst.pg.waitForTimeout(300); await asst.pg.locator('#addnote').click(); await asst.pg.locator('.tnote-edit input').first().fill('finish high off the glass');
 await asst.pg.fill('#f-wentWell', 'Good tempo all three sets'); await asst.pg.fill('#f-adjust', 'Same speed, eyes on the rim'); await asst.pg.fill('#f-why', 'Left-hand finishes win you minutes'); await asst.pg.getByRole('button', { name: /^Approve/ }).click(); await asst.gotIt();
 await player.pg.reload(); await player.pg.waitForTimeout(600); ok(/head coach checking/i.test(await player.pg.locator('main').innerText()), 'player sees “head coach checking it” (same Sign-off state)');
 
@@ -86,7 +89,8 @@ await head.pg.fill('#ed-adjust', 'Same speed, eyes on the rim, finish high'); aw
 await player.pg.reload(); await player.pg.waitForTimeout(700); const today = await player.pg.locator('main').innerText();
 ok(/Approved/i.test(today) && /finish high/.test(today) && /What you did well/i.test(today), 'player sees Next step ready + the signed-off structured feedback'); await player.shot('28-player-next-step');
 // 8b · ❓ on feedback → thread tied to the feedback + Reply needed in the assigned coach's queue → reply
-await player.pg.getByRole('button', { name: '❓ Question' }).click(); await player.pg.locator('input[id^="q-"]').fill('Finish high on which side?'); await player.pg.getByRole('button', { name: 'Ask' }).click(); await player.pg.waitForTimeout(600);
+ok(/0:03/.test(today) && /Your focus this week/i.test(today), 'live: focus card with the clip note');
+await player.pg.locator('#ack-q').click(); await player.pg.locator('#ackq').fill('Finish high on which side?'); await player.pg.getByRole('button', { name: 'Send question' }).click(); await player.pg.waitForTimeout(600);
 await asst.go('/coach'); const qrow = asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Question on feedback' }); ok(await qrow.count() === 1, 'live: question on feedback → Reply needed in the assistant’s queue');
 await qrow.click(); await asst.pg.waitForTimeout(500); await asst.pg.fill('#msg', 'Both. Left first.'); await asst.pg.getByRole('button', { name: 'Send' }).click(); await asst.pg.waitForTimeout(500);
 await asst.go('/coach'); ok(await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Question on feedback' }).count() === 0, 'live: reply in the feedback thread clears it');

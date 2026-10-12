@@ -7,21 +7,29 @@ import { isoDay, relative, shortWhen } from '../../shared/time';
 import { clock, first, guide, tierReply, userName, lastReview, lastSubmission, openAssignment, playerAssignments, playerCycle, progress } from '../../shared/workflow';
 import { greeting, rhythmToday } from '../../shared/personal';
 import { ActionButton, JourneyMap, Moments, PathPanel, PlayerPicker, Rubric, UserMenu, useFamilyPlayer } from '../ui';
-import { CoachKnows, CycleReviewPlayer, FeedbackCard, FeedbackTimeline, PromiseCard, ReflectionCard, TournamentBox, UnifiedInbox, WhyLine } from '../v4';
+import { ClipPicker, FocusCard, RETENTION_COPY, WorkingOn, needsAck, type PickedClip } from '../v5';
+import { CoachKnows, CycleReviewPlayer, FeedbackTimeline, PromiseCard, ReflectionCard, TournamentBox, UnifiedInbox, WhyLine } from '../v4';
 
 function CheckIn({ p }: { p: Player }) {
-  const s = useSnap(); const { run } = useStore(); const a = openAssignment(s, p.id)!;
+  const s = useSnap(); const { run, upload } = useStore(); const a = openAssignment(s, p.id)!;
   const [reps, setReps] = useState<boolean[]>(() => Array(a.reps).fill(false)); const [r, setR] = useState(''); const [link, setLink] = useState(''); const [busy, setBusy] = useState(false);
+  const [clip, setClip] = useState<PickedClip | null>(null); const [watch, setWatch] = useState(''); const [stage, setStage] = useState('');
   const done = reps.filter(Boolean).length;
   return (
-    <form className="checkin" onSubmit={async (e) => { e.preventDefault(); setBusy(true); await run({ type: 'submitRep', playerId: p.id, repsDone: done, reflection: r, linkUrl: link.trim() || undefined }); setBusy(false); }}>
+    <form className="checkin" onSubmit={async (e) => { e.preventDefault(); setBusy(true);
+      let clipId: string | undefined; if (clip) { setStage('Uploading clip…'); clipId = (await upload(p.id, clip.file, { durationSec: clip.durationSec, mime: clip.mime, watchFor: watch })) ?? undefined; if (!clipId) { setBusy(false); setStage(''); return; } }
+      setStage('Sending…'); await run({ type: 'submitRep', playerId: p.id, repsDone: done, reflection: r, linkUrl: link.trim() || undefined, clipId, watchFor: clip ? watch : undefined }); setBusy(false); setStage(''); }}>
       <p className="strong">1 · Tap each set you finished</p>
       <div className="reps">{reps.map((v, i) => <button type="button" key={i} aria-pressed={v} aria-label={`Set ${i + 1}`} className={`rep ${v ? 'on' : ''}`} onClick={() => setReps(reps.map((x, j) => (j === i ? !x : x)))}>{v ? '✓' : i + 1}</button>)}</div>
       <div className="repbar" aria-hidden><i style={{ width: `${(done / a.reps) * 100}%` }} /></div>
       <label htmlFor="refl" className="strong">2 · One honest sentence: what happened?</label>
       <textarea id="refl" className="input" rows={2} maxLength={240} value={r} onChange={(e) => setR(e.target.value)} placeholder="Lost it on the switch twice, better when I stayed low." />
-      <label htmlFor="rlink" className="small dim">Optional link (e.g. a clip you host elsewhere). We don’t take uploads or review full game film.</label><input id="rlink" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://" />
-      <div className="row between"><span className="small dim">{done}/{a.reps} sets · coach replies {tierReply(s, p)}</span><button className="btn lg" disabled={busy || !done || r.trim().length < 5}>Submit to coach</button></div>
+      <p className="strong">3 · Optional: a short clip of one rep</p>
+      <ClipPicker p={p} value={clip} onChange={setClip} />
+      {clip && <><label htmlFor="watch" className="small">What should your coach watch for? (optional)</label><input id="watch" className="input" maxLength={200} value={watch} onChange={(e) => setWatch(e.target.value)} placeholder="My feet on the catch" /></>}
+      <p className="small dim">{RETENTION_COPY} Short practice clips only, not full games.</p>
+      {!clip && <details className="small"><summary>Or share a link instead</summary><label htmlFor="rlink" className="sr">Link</label><input id="rlink" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://" /></details>}
+      <div className="row between"><span className="small dim">{done}/{a.reps} sets · coach replies {tierReply(s, p)}</span><button className="btn lg" disabled={busy || !done || r.trim().length < 5}>{stage || 'Submit to coach'}</button></div>
     </form>
   );
 }
@@ -34,17 +42,17 @@ function RepCard({ p }: { p: Player }) {
   if (p.state === 'Work ready' && a) body = <>
     <p className="kicker orange">{retry ? 'Another attempt · with your coach’s adjustment' : 'Your next rep'}</p><h2 className="display">{a.title}</h2>
     <p className="meta">{a.reps} sets · {a.minutes} min · Focus: {cyc?.focus}</p><WhyLine p={p} />
-    {retry && rev && <FeedbackCard p={p} r={rev} me="player" compact />}
-    <ul className="cues">{a.cues.map((c) => <li key={c}>{c}</li>)}</ul><CheckIn p={p} /></>;
+    {rev && (retry || rev.reaction === 'got_it') && <FocusCard p={p} me="player" compact />}
+    <ul className="cues">{a.cues.map((c) => <li key={c}>{c}</li>)}</ul>{retry && needsAck(s, p) ? <p className="note">Confirm your coach’s adjustment above, then log this rep.</p> : <CheckIn p={p} />}</>;
   else if ((p.state === 'Submitted' || p.state === 'Feedback due' || p.state === 'Sign-off') && sub) body = <>
     <p className="kicker orange">{p.state === 'Sign-off' ? 'Feedback written · head coach checking it' : `Waiting on ${first(userName(s, p.coachId))}`}</p><h2 className="display">Submitted ✓</h2>
-    <p>{s.assignments.find((x) => x.id === sub.assignmentId)?.title} · {sub.repsDone} sets · “{sub.reflection}”</p>
+    <p>{s.assignments.find((x) => x.id === sub.assignmentId)?.title} · {sub.repsDone} sets{sub.clipId ? ` · 🎥 ${Math.round(s.clips.find((c) => c.id === sub.clipId)?.durationSec ?? 0)} s clip` : ''} · “{sub.reflection}”</p>
     <div className="sla-clock"><span>Coach replies by</span><b>{shortWhen(sub.dueBy)}</b><span className="small">{relative(sub.dueBy, clock(s))}</span></div>
     <p className="small dim">Then: you get what went well, one adjustment, why, and your next rep. {queued.length ? `${queued.length} more rep${queued.length > 1 ? 's' : ''} this cycle.` : 'This is the last rep of the cycle.'}</p></>;
   else if (p.state === 'Next step ready') body = <>
-    <p className="kicker orange">{sub?.reviewed === false ? 'Logged' : 'Coach feedback'}</p><h2 className="display">{sub?.reviewed === false ? 'Rep logged ✓' : rev?.decision === 'approve' ? 'Approved ✓' : 'Feedback in'}</h2>
-    {sub?.reviewed === false ? <p className="small">You’ve used this week’s {p.tier} reviews. Your coach still sees this log. Reviews reset Sunday.</p> : rev && <FeedbackCard p={p} r={rev} me="player" />}
-    <ActionButton g={g} className="btn lg" /><p className="small dim">{queued.length ? `Unlocks: ${queued[0].title}` : 'That was the last rep. Next: your cycle review.'}</p></>;
+    <p className="kicker orange">{sub?.reviewed === false ? 'Logged' : `Coach feedback · ${rev?.decision === 'approve' ? 'Approved ✓' : 'Feedback in'}`}</p>{sub?.reviewed === false && <h2 className="display">Rep logged ✓</h2>}
+    {sub?.reviewed === false ? <><p className="small">You’ve used this week’s {p.tier} reviews. Your coach still sees this log. Reviews reset Sunday.</p><ActionButton g={g} className="btn lg" /></> : rev && <FocusCard p={p} me="player" />}
+    <p className="small dim">{queued.length ? `Unlocks: ${queued[0].title}` : 'That was the last rep. Next: your cycle review.'}</p></>;
   else if (p.state === 'Plan set') body = <><p className="kicker orange">New plan · Cycle {cyc?.index} · 4 weeks</p><h2 className="display">{cyc?.focus}</h2><WhyLine p={p} /><ol className="planlist">{queued.map((x) => <li key={x.id}>{x.title} <span className="dim small">· {x.reps} sets</span></li>)}</ol><ActionButton g={g} className="btn lg" /></>;
   else if (p.state === 'Cycle review') body = <><p className="kicker orange">Cycle {cyc?.index} complete</p><h2 className="display">You finished the cycle.</h2><p>{g.why}</p><ActionButton g={g} className="btn lg" /></>;
   else if (p.state === 'Plan building') body = <><p className="kicker orange">Plan on the way</p><h2 className="display">{first(userName(s, p.coachId))} is building your plan.</h2><p>{g.why}</p><p className="small dim">It lands by {g.byWhen}. Meanwhile: your daily habits below start your streak.</p></>;
@@ -70,6 +78,7 @@ function Today({ p }: { p: Player }) {
   const repOwnsAction = ['Work ready', 'Next step ready', 'Plan set', 'Cycle review', 'Plan building'].includes(p.state);
   return (<>
     <div className="hello"><div><p className="kicker">{r.label} · Level {pr.level} {pr.name}</p><h1 className="display">{greeting(p, clock(s))}</h1><p className="small light">{r.player}</p></div><span className={`flame big ${pr.streak >= 3 ? 'hot' : ''}`} aria-label={`${pr.streak} day streak`}>🔥{pr.streak}</span></div>
+    <WorkingOn p={p} editable />
     {!repOwnsAction && <PathPanel p={p} role="player" />}
     <RepCard p={p} />
     {(day === 5 || day === 6 || day === 0) && <ReflectionCard p={p} />}

@@ -66,7 +66,7 @@ export function Thread({ p, me, onSend }: { p: Player; me: 'player' | 'parent' |
       <form className="composer" onSubmit={(e) => { e.preventDefault(); if (t.trim()) { onSend(t.trim(), link.trim() || undefined); setT(''); setLink(''); setShowLink(false); } }}>
         <div className="row gap"><label className="sr" htmlFor="msg">Message</label><input id="msg" className="input grow" value={t} onChange={(e) => setT(e.target.value)} placeholder="Write a message" />
           <button type="button" className="chip" aria-pressed={showLink} onClick={() => setShowLink(!showLink)} title="Attach a link">🔗 Link</button><button className="btn" disabled={!t.trim()}>Send</button></div>
-        {showLink && <><label className="sr" htmlFor="msglink">Link URL</label><input id="msglink" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://… (a link only. File and film uploads aren’t offered)" /></>}
+        {showLink && <><label className="sr" htmlFor="msglink">Link URL</label><input id="msglink" className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://… (links here; clips go with a check-in on Today)" /></>}
       </form>
     </div>
   );

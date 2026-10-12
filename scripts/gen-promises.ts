@@ -27,5 +27,16 @@ ${rows.join('\n')}
 | “…from one coach, not a rotating staff and not an AI.” | “…from a real coach you know by name, never an AI, and the head coach checks any review an assistant writes.” | Same reason |
 | Template “Weak-hand starter (3 wk)”; cycles of 21 days | 4-week cycles with a cycle review | Matches the new 4-week cycle review |
 | Support: “Messages tab” | “Inbox tab” | Messages and notifications are merged into one inbox |
+
+## Copy changed in v5 (short clips)
+| Was | Now | Why |
+|---|---|---|
+| Promise “Links only, no uploads or full game film.” | Promises \`short-clips\`, \`clip-reviewed\`, \`clip-privacy\` | Players and parents can now attach one clip (≤30 s, ≤50 MB) per check-in |
+| Log rep: “We don’t take uploads or review full game film.” | Clip picker with limits, trim hint and privacy line; links moved under “Or share a link instead” | Same |
+| FAQ: “describe a 60-second phone clip…” | “send one short practice clip (up to 30 seconds)… time-stamped notes… count toward weekly reviews” | Matches the 30 s limit and the review quota |
+| Hero side-by-side: “Every check-in gets a reply by a set time” | “Every reviewed check-in…” | Weekly review allowances (v4) |
+| Message link hint “a link only. File and film uploads aren’t supported” | “Links here; clips go with a check-in on Today” | Clips attach to check-ins, not messages |
+| Privacy page | Adds clip storage, who sees clips, 90-day deletion, under-13 consent | Clip privacy promise |
+| Consent text v2026-10 | v2026-10b adds short practice clips | Parental consent covers video for under-13s |
 `);
 console.log(`PROMISES.md: ${PROMISES.length} promises`);

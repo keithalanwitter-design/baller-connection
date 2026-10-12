@@ -4,6 +4,7 @@ import { useSnap, useStore } from '../store';
 import { weekKey } from '../../shared/time';
 import { clock, family, first, playerCycle, progress } from '../../shared/workflow';
 import { Moments, PathPanel, PlayerPicker, Track, UserMenu, useFamilyPlayer } from '../ui';
+import { ClipPrivacy, FocusCard } from '../v5';
 import { CoachKnows, CycleReviewPlayer, PromiseCard, UnifiedInbox } from '../v4';
 import { plainFeedback } from '../../shared/personal';
 import { useEffect, useState } from 'react';
@@ -53,6 +54,7 @@ export default function Parent() {
         <h1 className="display">{first(p.name)}’s week</h1>
         <Track state={p.state} />
         <PathPanel p={p} role="parent" compact />
+        <FocusCard p={p} me="parent" compact />
         <div className="stats"><div><b>{assigned.length}</b><span>reps this cycle</span></div><div><b>{subs.length}</b><span>done this week</span></div><div><b>{pr.streak}</b><span>day streak</span></div><div><b>L{pr.level}</b><span>{pr.name}</span></div></div>
         <section className="panel"><h3 className="display">Coach’s weekly note</h3>{digest ? <blockquote className="quote sm">{digest.text}</blockquote> : <p className="dim">The coach approves this week’s summary on Sunday.</p>}</section>
         <section className="panel"><h3 className="display">This cycle{cyc ? `: ${cyc.focus}` : ''}</h3>{assigned.length === 0 ? <p className="dim">No work assigned yet.</p> :
@@ -61,6 +63,7 @@ export default function Parent() {
         <section className="panel" id="messages"><h3 className="display">Messages & updates</h3><p className="small dim">Pick a type: General, Schedule change, or Urgent (injury or a same-day change: {s.settings.urgentReplyHours} office hours, head coach alerted).</p><UnifiedInbox players={[p]} me="parent" fixedPlayer /></section>
         <CycleReviewPlayer p={p} me="parent" />
         <CoachKnows p={p} />
+        <ClipPrivacy p={p} />
         <Account p={p} />
         <p className="small dim">No coaching homework for you. {canPause && <button className="link small" onClick={() => run({ type: 'pause', playerId: p.id })}>Pause plan</button>}</p>
       </main>
