@@ -132,7 +132,7 @@ describe('Stripe webhook: signature, idempotency, entitlements', () => {
     expect(await verifyStripe(payload, null, secret, now)).toBe(false);
     const env = await makeEnv({ STRIPE_WEBHOOK_SECRET: secret }); const c = client(env); await runCommand(env, SYSTEM_OF(), { type: 'sweep' });
     const s0 = seed(); const ev = mockStripeEvents(s0, 'avery', 'invoice_failed')[0]; const body = JSON.stringify(ev);
-    const post = async (b: string, sig: string) => { const r = await (await import('../server/app')).handle(new Request('http://t/api/stripe/webhook', { method: 'POST', headers: { 'stripe-signature': sig }, body: b }), env); return { status: r.status, body: await r.json() }; };
+    const post = async (b: string, sig: string) => { const r = await (await import('../server/app')).handle(new Request('http://t/api/stripe/webhook', { method: 'POST', headers: { 'stripe-signature': sig }, body: b }), env); return { status: r.status, body: (await r.json()) as Record<string, unknown> }; };
     expect((await post(body, 'v1=bad,t=1')).status).toBe(400); void c;
     const first = await post(body, await signStripe(body, secret)); expect(first.status).toBe(200); expect(first.body.duplicate).toBe(false);
     const dup = await post(body, await signStripe(body, secret)); expect(dup.status).toBe(200); expect(dup.body.duplicate).toBe(true);
