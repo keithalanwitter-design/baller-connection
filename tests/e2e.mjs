@@ -239,7 +239,7 @@ await pg.locator('#card-on').uncheck(); await pg.waitForTimeout(150); await open
 { const m = await b.newPage({ viewport: { width: 390, height: 844 }, isMobile: true }); m.on('pageerror', (e) => errs.push(e.message));
   await m.goto(B + '#/'); await m.waitForTimeout(500); await m.screenshot({ path: 'shots/80-mobile-home.png' });
   ok(await m.locator('.s-nav').isHidden() && await m.locator('.s-menu').isVisible(), 'mobile: nav collapses to a menu button');
-  await m.locator('.s-menu').click(); ok((await m.locator('#s-drawer a').count()) >= 6, 'mobile: menu lists every route'); await m.screenshot({ path: 'shots/81-mobile-menu.png' }); await m.locator('.s-menu').click();
+  await m.locator('.s-menu').click(); await m.waitForTimeout(500); ok((await m.locator('#s-drawer a').count()) >= 6, 'mobile: menu lists every route'); await m.screenshot({ path: 'shots/81-mobile-menu.png' }); await m.locator('.s-menu').click();
   ok(!(await m.locator('.s-mcta').getAttribute('class')).includes('show'), 'mobile: sticky CTA hidden over the hero'); await m.mouse.wheel(0, 1400); await m.waitForTimeout(500);
   ok((await m.locator('.s-mcta').getAttribute('class')).includes('show'), 'mobile: sticky Apply CTA after scrolling'); await m.screenshot({ path: 'shots/82-mobile-pillars.png' });
   for (const [r, n] of [['/plans', '83-mobile-plans'], ['/how', '84-mobile-how'], ['/parents', '85-mobile-parents'], ['/login', '86-mobile-login'], ['/apply', '87-mobile-apply']]) { await m.goto(B + '#' + r); await m.waitForTimeout(450); await m.screenshot({ path: `shots/${n}.png` }); }
