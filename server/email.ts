@@ -1,5 +1,5 @@
 /**
- * Pluggable email delivery. EMAIL_PROVIDER = log (default) | resend | postmark.
+ * Pluggable email delivery. EMAIL_PROVIDER = resend (default) | postmark | log.
  * Secrets: RESEND_API_KEY or POSTMARK_SERVER_TOKEN (EMAIL_API_KEY still works for either). EMAIL_FROM is a plain var.
  * Without a key the Log provider is used: mail is stored in the staff outbox and nothing leaves the server.
  */
@@ -27,7 +27,7 @@ export interface EmailEnv { EMAIL_PROVIDER?: string; EMAIL_API_KEY?: string; RES
 export function makeProvider(env: EmailEnv, f: Fetch = fetch): EmailProvider {
   const from = env.EMAIL_FROM ?? 'Baller Connection <coach@example.com>';
   const resend = env.RESEND_API_KEY ?? (env.EMAIL_PROVIDER === 'resend' ? env.EMAIL_API_KEY : undefined); const postmark = env.POSTMARK_SERVER_TOKEN ?? (env.EMAIL_PROVIDER === 'postmark' ? env.EMAIL_API_KEY : undefined);
-  if (env.EMAIL_PROVIDER === 'resend' && resend) return new ResendProvider(resend, from, f);
+  if ((env.EMAIL_PROVIDER ?? 'resend') === 'resend' && resend) return new ResendProvider(resend, from, f);
   if (env.EMAIL_PROVIDER === 'postmark' && postmark) return new PostmarkProvider(postmark, from, f);
   return new LogProvider();
 }

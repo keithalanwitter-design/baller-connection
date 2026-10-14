@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HashRouter } from 'react-router-dom';
 import './index.css';
+import './design.css';
 import App from './App';
 import { StoreProvider } from './store';
 import { registerPwa } from './pwa';

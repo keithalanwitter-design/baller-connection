@@ -1,4 +1,4 @@
-# Baller Connection v7
+# Baller Connection v8
 
 **One focus. One next rep. A coach who answers.**
 
@@ -6,6 +6,13 @@ Keith Witter's virtual player-development program, rebuilt as a multi-user produ
 
 - **Live demo (GitHub Pages):** https://keithalanwitter-design.github.io/baller-connection/ This build runs the same engine in your browser on fictional data. The demo bar switches between **Player · Parent · Head coach · Assistant · Ops**.
 - **Real product:** the same app served by a Cloudflare Worker with D1, sessions and cron. See **[DEPLOY.md](DEPLOY.md)**.
+
+## What's new in v8: one promise, a premium site, Google sign-in
+- **Positioning** ([POSITIONING.md](POSITIONING.md)): *Make practice show up in games.* Three pillars (one clear weekly plan · a real coach watching · proof in games), the proof points the app enforces, and what we don't do.
+- **New site map**: Home · How it works (a week in the life) · Method · For parents · Plans (comparison + FAQ) · Coach (placeholder) · Apply · Sign in · 404. Same header, footer and sticky mobile CTA on every page.
+- **Design system** (`src/design.css`, `src/site/site.css`): tokens for color, a 1.25 type scale and 4-pt spacing. Inter for UI, the condensed display face for headlines only. One button, chip, card, form and empty-state style everywhere, including inside the app. Visible focus, AA contrast, reduced motion respected. App screens load on demand, so the site stays light.
+- **Google sign-in**: OIDC code flow + PKCE, state + nonce, JWKS-verified ID tokens, `email_verified` required. Links to existing (invited) accounts only. Simulated in the demo. Setup: DEPLOY.md 3b-g.
+- **Resend** is the default email provider. `npm run email:test -- you@domain` sends one test email. Setup: DEPLOY.md 3a.
 
 ## What's new in v7: see the player you're becoming
 - **Game log + check-in** (player or parent, about a minute): opponent, optional stats (made ≤ tried checked), confidence / focus / energy on 1–5 (emoji scale under 13, and fewer stats), one line "did well", one line "would replay", and "did you try the focus?" (yes / sometimes / not yet). The coach gets a light **Game log** queue item with no reply clock. If the player asks for feedback (1 per week, outside the review allowance), it becomes **Game check-in** with the reply window and the standard feedback format.

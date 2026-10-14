@@ -22,6 +22,8 @@ To change the schema later, add `server/migrations/0006_<name>.sql` and run the 
 
 > v5 adds `0005_v5_clips.sql` (the clips table plus new columns). Run the same migrations command.
 
+> v8 adds `0009_v8_google.sql` (`oauth_identities` for Google sign-in). Additive only.
+
 > v7 adds `0007_v7_games_timeline.sql` (games, wins, timeline_notes; new columns for affirmation, Player Card settings, pressure reps and shot logs) and `0008_v7_push.sql` (push_subscriptions). Additive only. Run the same command.
 
 > v6 adds `0006_v6_auth_email_billing.sql`: magic-link tokens, email preferences, outbox retry columns, `subscriptions` and `billing_events`. Additive only. **v6 requires payment before onboarding** (Settings → `requirePayment`). Families already onboarded stay as they are; set billing to *comp* for anyone you don't want to charge.
@@ -48,16 +50,56 @@ In `wrangler.toml` `[vars]`:
 - `DEMO = "0"`: never enable in production. It opens `/api/demo/*` and the clock controls.
 - First boot, no demo data: set `OWNER_EMAIL` and `OWNER_NAME` (vars). The DB starts empty with one head-coach account. Open `/#/forgot`, enter that email, and set the password from the emailed link.
 
-## 3a · Email (Resend or Postmark) and domain authentication
-1. Pick a sending subdomain, e.g. `mail.yourdomain.com`, and add it in Resend (Domains) or Postmark (Sender Signatures → Domain).
-2. Add the DNS records the provider shows, at your DNS host (Cloudflare DNS if the domain is there; set them **DNS only**, not proxied):
-   - **SPF**: a TXT record including the provider (`include:amazonses.com` for Resend's MX/return-path subdomain, `include:spf.mtasv.net` for Postmark). Keep one SPF record per name; merge includes if one exists.
-   - **DKIM**: the TXT/CNAME key record(s) the provider gives (e.g. `resend._domainkey`, or Postmark's `…pm._domainkey`).
-   - **Return-Path / bounce**: the CNAME Postmark asks for, or Resend's MX + TXT on `send.` — this aligns SPF.
-   - **DMARC**: start with `_dmarc  TXT  "v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com"`, move to `p=quarantine` after a clean week.
-3. Wait for the provider to show *Verified*, then set `EMAIL_FROM` to an address on that domain and `EMAIL_PROVIDER` to `resend` or `postmark`.
-4. Every non-essential email carries a one-click unsubscribe (`List-Unsubscribe` + `List-Unsubscribe-Post` headers → `POST /api/unsubscribe`). Sign-in, invite, consent and payment emails are always sent. Quiet hours (default 9 PM–7 AM, program timezone) delay non-urgent mail.
-5. Failures retry at 1 m, 5 m, 30 m, 2 h; after 5 attempts, or a permanent 4xx, mail goes to **Ops → Outbox → Dead letters** with the error and a Retry button.
+## 3a · Email with Resend (default provider)
+**What Keith supplies:** (1) a Resend account, (2) access to the DNS for the sending domain, (3) one API key. Nothing else.
+1. **Domain.** In Resend → **Domains** → *Add domain*, use a sending subdomain such as `mail.yourdomain.com` (keeps your main domain's reputation separate). Region: the default is fine.
+2. **DNS records.** Resend shows the exact values. Add them at your DNS host. On Cloudflare DNS, set them to **DNS only** (grey cloud), not proxied:
+   | Type | Name (host) | Value | Purpose |
+   |---|---|---|---|
+   | TXT | `resend._domainkey.mail` | `p=MIGf…` (long key from Resend) | DKIM signature |
+   | MX | `send.mail` | `feedback-smtp.<region>.amazonses.com`, priority 10 | bounce / return path |
+   | TXT | `send.mail` | `v=spf1 include:amazonses.com ~all` | SPF for the return path |
+   | TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com` | DMARC (recommended; move to `p=quarantine` after a clean week) |
+   Keep one SPF record per name. If one already exists on that name, merge the `include:`.
+3. Wait until Resend shows the domain as **Verified** (usually minutes, up to a few hours).
+4. **API key.** Resend → **API Keys** → *Create* → permission **Sending access**, limited to that domain. Store it:
+   ```bash
+   npx wrangler secret put RESEND_API_KEY
+   ```
+   and in `wrangler.toml` `[vars]`: `EMAIL_PROVIDER = "resend"` (the default) and `EMAIL_FROM = "Baller Connection <coach@mail.yourdomain.com>"`.
+5. **Test it once** from your machine, before deploying:
+   ```bash
+   RESEND_API_KEY=re_… EMAIL_FROM="Baller Connection <coach@mail.yourdomain.com>" npm run email:test -- you@yourdomain.com
+   ```
+   It sends exactly one email and prints Resend's error in plain words if the key or domain is wrong. Without a key it sends nothing and lists what's missing.
+6. Behaviour: without `RESEND_API_KEY` nothing leaves the server and every email appears in **Ops → Outbox**. Every non-essential email has a one-click unsubscribe (`List-Unsubscribe` + `List-Unsubscribe-Post` → `POST /api/unsubscribe`). Sign-in, invite, consent and payment emails always send. Quiet hours (default 9 PM–7 AM, program timezone) delay non-urgent mail. Failures retry at 1 m, 5 m, 30 m and 2 h. After 5 attempts, or a permanent 4xx, the email moves to **Ops → Outbox → Dead letters** with a Retry button.
+- Postmark still works (`EMAIL_PROVIDER = "postmark"` + `POSTMARK_SERVER_TOKEN`) if you ever switch.
+
+## 3b-g · Google sign-in (OpenID Connect)
+**What Keith supplies:** a Google Cloud project, plus the **Client ID** and **Client secret** it creates. Steps in [Google Cloud Console](https://console.cloud.google.com/):
+1. Top bar → project picker → **New project** (e.g. `baller-connection`) → select it.
+2. **APIs & Services → OAuth consent screen** (shown as **Google Auth Platform** in newer consoles) → *Get started*:
+   - App name `Baller Connection`, user support email, developer contact email.
+   - Audience: **External**.
+   - **Branding**: add your app domain (`https://yourdomain.com`), privacy policy `https://yourdomain.com/#/privacy`, terms `https://yourdomain.com/#/terms`, and the **authorized domain** `yourdomain.com`.
+   - **Data access / scopes**: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`. These are non-sensitive scopes, so no Google review is needed.
+   - **Publish app** (Audience → *Publish*) when ready. Until then, only the **Test users** you list can sign in.
+3. **Clients → Create client** → Application type **Web application**, name `Baller Connection web`.
+   - **Authorized JavaScript origins**: `https://yourdomain.com` (your `APP_URL` origin).
+   - **Authorized redirect URIs**, exactly: `https://yourdomain.com/api/auth/google/callback` (`APP_URL` + `/api/auth/google/callback`. Scheme, host and path must match character for character). For local testing also add `http://localhost:8787/api/auth/google/callback`.
+4. Copy the **Client ID** and **Client secret**:
+   ```bash
+   npx wrangler secret put GOOGLE_CLIENT_SECRET
+   ```
+   and in `wrangler.toml` `[vars]`: `GOOGLE_CLIENT_ID = "1234-abc.apps.googleusercontent.com"`. `APP_URL` must be set to the same origin as the redirect URI.
+5. Check: `curl https://yourdomain.com/api/health` shows `"google":true`. The sign-in page shows **Continue with Google**.
+
+How it behaves:
+- Authorization code flow with **PKCE (S256)**, a random `state` and `nonce` held in a signed, HttpOnly, 10-minute cookie scoped to `/api/auth/google`.
+- The ID token is verified against Google's JWKS (RS256, cached ≤ 1 h, refetched on an unknown `kid`), checking `iss`, `aud` = your client ID, `exp`, `nonce`, and **`email_verified = true`**.
+- **No open signup.** A Google account signs in only if its verified email matches an existing account; the link is stored in `oauth_identities` (migration `0009`). A pending invite for that email is sent to the invite page to finish consent. Anyone else is told to apply.
+- Players under 13 keep the username + PIN. Magic links and passwords still work.
+- The GitHub Pages demo simulates Google with fictional accounts. It never contacts Google.
 
 ## 3c · Phone notifications (Web Push / VAPID), optional
 Push stays in **log mode** (decides what it would send, sends nothing) until both keys are set; `/api/health` shows `"push":"log"` or `"push":"vapid"`.

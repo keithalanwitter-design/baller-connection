@@ -56,7 +56,7 @@ function ActionCenter() {
       {isHead && <div className="seg light" role="group" aria-label="Whose queue"><button aria-pressed={scope === 'mine'} className={scope === 'mine' ? 'on' : ''} onClick={() => setScope('mine')}>Mine</button><button aria-pressed={scope === 'all'} className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>Whole team</button></div>}
       <div className="chips" role="group" aria-label="Filter queue">
         <button aria-pressed={f === 'All'} className={`chip ${f === 'All' ? 'on' : ''}`} onClick={() => setF('All')}>All <b>{q.length}</b></button>
-        {QUEUE_KINDS.map((kind) => <button key={kind} aria-pressed={f === kind} className={`chip k-${k(kind)} ${f === kind ? 'on' : ''}`} onClick={() => setF(kind)}>{kind} <b>{q.filter((x) => x.kind === kind).length}</b></button>)}
+        {QUEUE_KINDS.filter((kind) => f === kind || q.some((x) => x.kind === kind)).map((kind) => <button key={kind} aria-pressed={f === kind} className={`chip k-${k(kind)} ${f === kind ? 'on' : ''}`} onClick={() => setF(kind)}>{kind} <b>{q.filter((x) => x.kind === kind).length}</b></button>)}
       </div></div>
     <ol className="queue">{rows.map((x, i) => <QRow key={x.key} i={i} to={x.to} name={x.player.name} kind={x.kind} state={x.player.state} what={x.what} why={x.why} owner={scope === 'all' ? x.ownerName : undefined} unlocks={x.unlocks} dueBy={x.dueBy} overdue={x.overdue} />)}
       {rows.length === 0 && <li className="panel dim">Nothing in this lane.</li>}</ol>
@@ -69,7 +69,7 @@ function OpsQueue() {
   return (<>
     <div className="row between wrapx"><div><p className="kicker">{t.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · Ops</p><h1 className="display">Ops queue</h1><p className="lead sm">Intake, invites, billing status, scheduling and privacy requests. No coaching calls here.</p></div><Capacity /></div>
     <div className="chips" role="group" aria-label="Filter ops queue"><button aria-pressed={f === 'All'} className={`chip ${f === 'All' ? 'on' : ''}`} onClick={() => setF('All')}>All <b>{q.length}</b></button>
-      {OPS_KINDS.map((kind) => <button key={kind} aria-pressed={f === kind} className={`chip ${f === kind ? 'on' : ''}`} onClick={() => setF(kind)}>{kind} <b>{q.filter((x) => x.kind === kind).length}</b></button>)}</div>
+      {OPS_KINDS.filter((kind) => f === kind || q.some((x) => x.kind === kind)).map((kind) => <button key={kind} aria-pressed={f === kind} className={`chip ${f === kind ? 'on' : ''}`} onClick={() => setF(kind)}>{kind} <b>{q.filter((x) => x.kind === kind).length}</b></button>)}</div>
     <ol className="queue">{rows.map((x, i) => <QRow key={x.key} i={i} to={x.to} name={x.player.name} kind={x.kind} state={x.player.state} what={x.what} why={x.why} unlocks={x.unlocks} dueBy={x.dueBy} overdue={x.overdue} />)}
       {rows.length === 0 && <li className="panel dim">Nothing in this lane.</li>}</ol>
   </>);

@@ -78,4 +78,7 @@ export class Repo {
   pushSubsFor(userId: string) { return this.db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').bind(userId).all<{ endpoint: string; p256dh: string; auth: string }>(); }
   countPushSubs(userId: string) { return this.db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').bind(userId).first<{ n: number }>().then((r) => Number(r?.n ?? 0)); }
   markPush(endpoint: string, err: string | null) { return this.db.prepare(err ? 'UPDATE push_subscriptions SET last_error = ? WHERE endpoint = ?' : 'UPDATE push_subscriptions SET last_ok_at = ? WHERE endpoint = ?').bind(err ?? new Date().toISOString(), endpoint).run(); }
+  // ---------- v8 Google identities ----------
+  googleIdentities() { return this.db.prepare("SELECT sub, user_id AS userId FROM oauth_identities WHERE provider = 'google'").all<{ sub: string; userId: string }>().then((r) => r.results); }
+  linkGoogle(sub: string, userId: string, email: string) { const now = new Date().toISOString(); return this.db.prepare("INSERT INTO oauth_identities (provider, sub, user_id, email, created_at, last_login_at) VALUES ('google', ?, ?, ?, ?, ?) ON CONFLICT(provider, sub) DO UPDATE SET last_login_at = excluded.last_login_at").bind(sub, userId, email.toLowerCase(), now, now).run(); }
 }

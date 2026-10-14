@@ -1,18 +1,18 @@
-import { useEffect, type ReactNode } from 'react';
-import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { UserRole } from '../shared/domain';
 import { Forgot, Invite, Login, Reset, homeFor } from './pages/Auth';
 import Inbox from './pages/Inbox';
 import { useStore } from './store';
 import { ErrorBar, UserMenu } from './ui';
-import Home from './pages/Home';
-import How from './pages/How';
+import { CoachBio, Home, How, Method, NotFound, Parents, Plans } from './site/Site';
 import Apply from './pages/Apply';
-import Welcome from './pages/Welcome';
-import { PlayerShell } from './pages/Player';
-import Parent from './pages/Parent';
-import { CoachShell } from './pages/Coach';
-import SystemLog from './pages/Log';
+// App shells load on demand so the public site stays light.
+const Welcome = lazy(() => import('./pages/Welcome'));
+const PlayerShell = lazy(() => import('./pages/Player').then((m) => ({ default: m.PlayerShell })));
+const Parent = lazy(() => import('./pages/Parent'));
+const CoachShell = lazy(() => import('./pages/Coach').then((m) => ({ default: m.CoachShell })));
+const SystemLog = lazy(() => import('./pages/Log'));
 import { Legal } from './pages/Legal';
 import { AccountPage, CheckoutSim, MagicVerify, PortalSim } from './v6';
 
@@ -23,6 +23,7 @@ export function Logo({ light }: { light?: boolean }) {
 const PERSONAS: [UserRole, string, string][] = [['player', 'Player', '/app'], ['parent', 'Parent', '/parent'], ['head', 'Head coach', '/coach'], ['assistant', 'Assistant', '/coach'], ['ops', 'Ops', '/ops']];
 import { PublicCardPage } from './v7';
 import { UpdateToast } from './pwa';
+import { GoogleSim } from './google';
 function DemoBar() {
   const loc = useLocation(); const nav = useNavigate(); const { reset, run, as, setDemoRole } = useStore(); const p = loc.pathname;
   // The route decides the persona; the coach area remembers head vs assistant.
@@ -57,29 +58,7 @@ function Need({ roles, children }: { roles: UserRole[]; children: ReactNode }) {
 }
 function FamilyInbox() { return <div className="appshell"><header className="apph"><Logo light /><UserMenu /></header><main id="main" tabIndex={-1} className="appmain"><Inbox /></main></div>; }
 
-export function SiteHeader() {
-  return (
-    <header className="site-h"><div className="wrap row between">
-      <Logo light />
-      <nav aria-label="Main" className="mainnav">
-        <NavLink to="/how">How it works</NavLink><a href="#/?s=plans">Plans</a><a href="#/?s=faq">FAQ</a>
-        <NavLink to="/login" className="hide-sm">Sign in</NavLink>
-        <Link className="btn sm" to="/apply">Apply</Link>
-      </nav>
-    </div></header>
-  );
-}
-export function Footer() {
-  const { mode } = useStore();
-  return (
-    <footer className="foot"><div className="wrap fgrid">
-      <div><Logo light /><p>One focus. One next rep. A coach who answers.</p></div>
-      <nav aria-label="Footer"><Link to="/how">How it works</Link><Link to="/apply">Apply</Link><Link to="/login">Sign in</Link><Link to="/invite">Have an invite?</Link></nav>
-      <nav aria-label="Legal"><Link to="/privacy">Privacy</Link><Link to="/terms">Terms</Link><Link to="/support">Support</Link></nav>
-      <p className="small">© 2026 Baller Connection · {mode === 'demo' ? 'Demo build with fictional players.' : ''}</p>
-    </div></footer>
-  );
-}
+export { SiteHeader, Footer } from './site/Site';
 
 export default function App() {
   const { pathname } = useLocation(); const { s, error, last, dismiss, mode, ready, me, refresh } = useStore();
@@ -93,15 +72,15 @@ export default function App() {
       <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
       {mode === 'demo' && <DemoBar />}<ErrorBar /><UpdateToast />
       {!s || !ready ? <main id="main" className="loading">{error ? <><p>Couldn’t reach the server. Check your connection, then try again.</p><button className="btn" onClick={() => refresh()}>Try again</button></> : 'Loading…'}</main> : (
-        <Routes>
-          <Route path="/" element={<Home />} /><Route path="/how" element={<How />} /><Route path="/apply" element={<Apply />} /><Route path="/login" element={<Login />} /><Route path="/forgot" element={<Forgot />} /><Route path="/reset" element={<Reset />} /><Route path="/invite" element={<Invite />} /><Route path="/magic" element={<MagicVerify />} />
+        <Suspense fallback={<main id="main" className="loading" aria-busy="true">Loading…</main>}><Routes>
+          <Route path="/" element={<Home />} /><Route path="/how" element={<How />} /><Route path="/method" element={<Method />} /><Route path="/parents" element={<Parents />} /><Route path="/plans" element={<Plans />} /><Route path="/coach-bio" element={<CoachBio />} /><Route path="/google" element={<GoogleSim />} /><Route path="/apply" element={<Apply />} /><Route path="/login" element={<Login />} /><Route path="/forgot" element={<Forgot />} /><Route path="/reset" element={<Reset />} /><Route path="/invite" element={<Invite />} /><Route path="/magic" element={<MagicVerify />} />
           <Route path="/checkout" element={<Need roles={['parent']}><CheckoutSim /></Need>} /><Route path="/billing/portal" element={<Need roles={['parent']}><PortalSim /></Need>} /><Route path="/account" element={<Need roles={['head', 'assistant', 'ops', 'parent', 'player']}><AccountPage /></Need>} />
           <Route path="/welcome" element={<Need roles={['parent']}><Welcome /></Need>} /><Route path="/inbox" element={<Need roles={['parent', 'player']}><FamilyInbox /></Need>} />
           <Route path="/app/*" element={<Need roles={['player', 'parent']}><PlayerShell /></Need>} /><Route path="/parent" element={<Need roles={['parent']}><Parent /></Need>} />
           <Route path="/coach/*" element={<Need roles={['head', 'assistant']}><CoachShell /></Need>} /><Route path="/ops/*" element={<Need roles={['ops', 'head']}><CoachShell ops /></Need>} />
           <Route path="/log" element={<Need roles={['head', 'ops']}><SystemLog /></Need>} /><Route path="/demo" element={<DemoRedirect />} /><Route path="/card/:token" element={<PublicCardPage />} />
-          <Route path="/privacy" element={<Legal page="privacy" />} /><Route path="/terms" element={<Legal page="terms" />} /><Route path="/support" element={<Legal page="support" />} /><Route path="*" element={<Legal page="404" />} />
-        </Routes>)}
+          <Route path="/privacy" element={<Legal page="privacy" />} /><Route path="/terms" element={<Legal page="terms" />} /><Route path="/support" element={<Legal page="support" />} /><Route path="*" element={<NotFound />} />
+        </Routes></Suspense>)}
     </>
   );
 }

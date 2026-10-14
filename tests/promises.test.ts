@@ -68,8 +68,12 @@ describe('promise ledger', () => {
     s = run(s, ASST, { type: 'scheduleSession', playerId: 'nia', at: new Date(clock(s).getTime() + 2 * 864e5).toISOString(), minutes: 20, kind: 'check-in', note: 'Monthly' });
     expect(promiseCard(s, P(s, 'nia')).find((x) => x.promise.id === 'monthly-video')!.status.state).toBe('on-track');
   });
-  it('landing copy no longer makes promises the engine can’t keep', () => {
-    const home = fs.readFileSync('src/pages/Home.tsx', 'utf8');
-    expect(home).not.toMatch(/reply from their coach on every check-in/); expect(home).not.toMatch(/One coach reviews every submission personally/); expect(home).not.toMatch(/not a rotating staff/);
+  it('site copy makes no promises the engine can’t keep (v8 site)', () => {
+    const site = ['src/site/Site.tsx', 'src/site/content.ts'].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+    expect(site).not.toMatch(/reply from their coach on every check-in/); expect(site).not.toMatch(/One coach reviews every submission personally/); expect(site).not.toMatch(/not a rotating staff/);
+    expect(site).not.toMatch(/\b(elite|revolutionary|world-class|unlock your potential|guaranteed?)\b/i);
+    for (const m of site.matchAll(/\bAI\b[^'"<]{0,40}/g)) expect(m[0], 'AI is only ever mentioned as something we do not do').toMatch(/^AI( coaching)?\.?\s*$|^AI\./);
+    expect(site).toMatch(/Never an AI/); expect(site).toMatch(/No full-game film/);
+    expect(site).toMatch(/deleted after 90 days/); expect(site).toMatch(/within 30 days/); expect(site).toMatch(/within 2 business days/);
   });
 });

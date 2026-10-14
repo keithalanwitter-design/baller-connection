@@ -81,9 +81,9 @@ function Today({ p }: { p: Player }) {
   const repOwnsAction = ['Work ready', 'Next step ready', 'Plan set', 'Cycle review', 'Plan building'].includes(p.state);
   return (<>
     <div className="hello"><div><p className="kicker">{r.label} · Level {pr.level} {pr.name}</p><h1 className="display">{greeting(p, clock(s))}</h1><p className="small light">{r.player}</p></div><span className={`flame big ${pr.streak >= 3 ? 'hot' : ''}`} aria-label={`${pr.streak} day streak`}>🔥{pr.streak}</span></div>
-    <WorkingOn p={p} editable />
     {!repOwnsAction && <PathPanel p={p} role="player" />}
     <RepCard p={p} />
+    <WorkingOn p={p} editable />
     <GamePlanCard p={p} editable compact />
     <InstallPrompt compact />
     {(day === 5 || day === 6 || day === 0) && <ReflectionCard p={p} />}

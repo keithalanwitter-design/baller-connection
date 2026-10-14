@@ -19,7 +19,8 @@
     "db:migrate:local": "wrangler d1 migrations apply baller-connection --local",
     "db:migrate:remote": "wrangler d1 migrations apply baller-connection --remote",
     "deploy": "npm run build:worker && wrangler deploy",
-    "stripe:setup": "tsx scripts/stripe-setup.ts"
+    "stripe:setup": "tsx scripts/stripe-setup.ts",
+    "email:test": "tsx scripts/email-test.ts"
   },
   "dependencies": {
     "react": "^19.2.8",

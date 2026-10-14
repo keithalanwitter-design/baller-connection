@@ -12,8 +12,23 @@ const state = async (pid) => pg.evaluate((id) => JSON.parse(localStorage.getItem
 const queueMatches = async () => { const chips = (await pg.locator('.chips .chip b').allTextContents()).map(Number); const rows = await pg.locator('.queue .qrow').count(); return chips[0] === rows && chips.slice(1).reduce((a, c) => a + c, 0) === rows; };
 
 await go('/'); await pg.evaluate(() => localStorage.clear()); await go('/');
-ok(await pg.locator('.heroloop svg').count() === 1, 'animated hero loop renders'); await shot('01-home');
-await go('/how'); ok(await pg.locator('.lane').count() === 4, 'workflow page shows 4 lanes'); await shot('02-how-it-works');
+// ---------- v8 site: one promise, clear IA, consistent chrome ----------
+ok(/make practice show up in games/i.test(await pg.locator('.s-hero h1').innerText()), 'home: one sharp promise');
+ok((await pg.locator('.s-hero .s-ctas a').first().innerText()).trim() === 'Apply' && /#\/apply$/.test(await pg.locator('.s-hero .s-ctas a').first().getAttribute('href')), 'home: primary CTA is Apply');
+ok(/see how it works/i.test(await pg.locator('.s-hero .s-ctas a').nth(1).innerText()), 'home: secondary CTA is See how it works');
+ok(await pg.locator('.s-pillar').count() === 3, 'home: three pillars'); ok(await pg.locator('.s-product').count() === 1, 'home: product visual (fictional player)'); await shot('01-home', false); await shot('01b-home-full');
+const IA = [['/how', /week in the life/i, '.s-wk', 6], ['/method', /practice that holds up/i, '.s-levels li', 5], ['/parents', /know it’s working/i, '.s-grid3 .s-card', 6], ['/plans', /honest plans/i, '.s-compare tbody tr', 11], ['/coach-bio', /coach \[your name\]/i, '.note', 2]];
+for (const [r, h, sel, n] of IA) { await go(r); ok(h.test(await pg.locator('h1').innerText()) && (await pg.locator(sel).count()) === n && (await pg.locator('.s-nav a.active').count()) === (r === '/coach-bio' ? 1 : 1), `${r}: page renders with its content and active nav`); }
+await go('/plans'); ok((await pg.locator('#faq .s-faq').count()) >= 6, 'plans: FAQ beside the comparison'); await shot('02-plans', false);
+await go('/how'); await shot('02-how-it-works', false); await go('/parents'); await shot('03-for-parents', false); await go('/method'); await shot('03b-method', false);
+await go('/coach-bio'); ok(/placeholder/i.test(await pg.locator('.s-main').innerText()), 'coach bio is clearly marked as a placeholder');
+await go('/definitely-not-a-page'); ok(/this page isn’t here/i.test(await pg.locator('h1').innerText()) && (await pg.locator('.s-404 a').count()) >= 3, '404 page with ways back');
+ok((await pg.locator('.s-foot nav a').count()) >= 10, 'consistent footer with every route');
+// Google sign-in (demo: simulated chooser running the same linking rules as the server)
+await go('/login'); await pg.getByRole('button', { name: 'Continue with Google' }).click(); await pg.waitForTimeout(300); ok(/\/google/.test(pg.url()), 'Google button opens the (simulated) chooser'); await shot('04-google-sim', false);
+await pg.getByRole('button', { name: /Someone new/ }).click(); ok(/no Baller Connection account/.test(await pg.locator('#google-msg').innerText()), 'Google: unknown email is refused (no open signup)');
+await pg.getByRole('button', { name: /Unverified email/ }).click(); ok(/isn’t verified/.test(await pg.locator('#google-msg').innerText()), 'Google: unverified email refused');
+await pg.getByRole('button', { name: /dana@demo\.test/ }).first().click(); await pg.waitForTimeout(400); ok(/#\/parent/.test(pg.url()), 'Google: invited parent signs in and lands on the parent view');
 
 // Apply
 await go('/apply'); await pg.fill('#pn', 'Casey Rowan'); await pg.fill('#pp', 'Pat Rowan'); await pg.fill('#pe', 'pat@demo.test'); await pg.getByRole('button', { name: 'Continue' }).click();
@@ -151,10 +166,6 @@ for (const r of ['/privacy', '/terms', '/support']) { await go(r); ok(await pg.l
 
 // ---------- v7: games, transfer, confidence, shooting log, timeline, Player Card, landing ----------
 await go('/'); await pg.evaluate(() => localStorage.clear()); await go('/');
-ok(await pg.locator('.jband li').count() === 4 && /Play.*Reflect.*Coach.*Improve/is.test(await pg.locator('.journey').innerText()), 'landing: Play, Reflect, Coach, Improve band');
-ok(/real coach watching/i.test(await pg.locator('.hero h1').innerText()), 'landing: headline angle'); ok(await pg.locator('.phone .ph-chart').count() === 1, 'landing: phone mockup of the timeline'); ok(/placeholder/i.test(await pg.locator('.founder').innerText()), 'landing: founder-why block marked placeholder');
-ok(/Self-tracking apps show you numbers/.test(await pg.locator('.compare').innerText()), 'landing: comparison line (no competitor named)');
-await pg.locator('.journey').scrollIntoViewIfNeeded(); await pg.screenshot({ path: 'shots/55-home-journey.png' }); await pg.locator('.tlband').screenshot({ path: 'shots/56-home-timeline-phone.png' });
 const v7 = () => pg.evaluate(() => JSON.parse(localStorage.getItem('baller-connection-v7')));
 // Game plan card + game log (Avery, 13): conf 3 then 2 after a seeded 4 → coach-only confidence flag
 await go('/app/games?p=avery'); ok(/Weak-hand control/.test(await pg.locator('#gameplan').innerText()), 'game plan card shows the current focus + cue');
@@ -225,6 +236,14 @@ await pg.locator('#card-on').uncheck(); await pg.waitForTimeout(150); await open
   const iw = await ios.newPage(); await iw.goto(B + '#/app?p=avery'); await iw.waitForTimeout(600); ok(/Add to Home Screen/.test(await iw.locator('#install').innerText()), 'iPhone Safari gets Add to Home Screen steps'); await iw.locator('#install').screenshot({ path: 'shots/72-ios-install.png' }); await ios.close();
 }
 
+{ const m = await b.newPage({ viewport: { width: 390, height: 844 }, isMobile: true }); m.on('pageerror', (e) => errs.push(e.message));
+  await m.goto(B + '#/'); await m.waitForTimeout(500); await m.screenshot({ path: 'shots/80-mobile-home.png' });
+  ok(await m.locator('.s-nav').isHidden() && await m.locator('.s-menu').isVisible(), 'mobile: nav collapses to a menu button');
+  await m.locator('.s-menu').click(); ok((await m.locator('#s-drawer a').count()) >= 6, 'mobile: menu lists every route'); await m.screenshot({ path: 'shots/81-mobile-menu.png' }); await m.locator('.s-menu').click();
+  ok(!(await m.locator('.s-mcta').getAttribute('class')).includes('show'), 'mobile: sticky CTA hidden over the hero'); await m.mouse.wheel(0, 1400); await m.waitForTimeout(500);
+  ok((await m.locator('.s-mcta').getAttribute('class')).includes('show'), 'mobile: sticky Apply CTA after scrolling'); await m.screenshot({ path: 'shots/82-mobile-pillars.png' });
+  for (const [r, n] of [['/plans', '83-mobile-plans'], ['/how', '84-mobile-how'], ['/parents', '85-mobile-parents'], ['/login', '86-mobile-login'], ['/apply', '87-mobile-apply']]) { await m.goto(B + '#' + r); await m.waitForTimeout(450); await m.screenshot({ path: `shots/${n}.png` }); }
+  await m.goto(B + '#/app?p=avery'); await m.waitForTimeout(500); await m.screenshot({ path: 'shots/88-mobile-today.png' }); await m.close(); }
 const mo = await b.newPage({ viewport: { width: 390, height: 844 }, isMobile: true }); mo.on('pageerror', (e) => errs.push(e.message));
 await mo.goto(B + '#/'); await mo.evaluate(() => localStorage.clear()); await mo.goto(B + '#/app?p=avery'); await mo.waitForTimeout(500); await mo.screenshot({ path: 'shots/16-mobile-today.png', fullPage: true });
 await mo.goto(B + '#/'); await mo.waitForTimeout(400); await mo.screenshot({ path: 'shots/17-mobile-home.png' });

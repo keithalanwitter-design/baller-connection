@@ -1,0 +1,94 @@
+/* ==========================================================================
+   Baller Connection design system (v8)
+   Loaded after index.css. Tokens → type → components → motion/a11y.
+   Brand: night blue + court orange. Display type for headlines only; Inter for everything you read or tap.
+   ========================================================================== */
+:root{
+  /* color */
+  --night:#0A1430;--night-2:#0E1B3F;--night-3:#15275A;--court:#1A3480;--blue:#2E6BFF;--blue-ink:#1F4FD1;--sky:#7FD6FF;
+  --orange:#FF5E1A;--orange-2:#FF7A3D;--orange-ink:#C2410C;--sun:#FFC53D;--green:#12A16C;--red:#D93A3F;
+  --paper:#F7F8FB;--paper-2:#EEF1F7;--line:#DDE3EE;--line-dark:#ffffff1f;--ink:#0A1430;--ink-2:#2A3654;--dim:#56617D;--lt:#B7C2DD;
+  /* type scale (1.25) */
+  --fs-xs:.75rem;--fs-sm:.875rem;--fs-md:1rem;--fs-lg:1.125rem;--fs-xl:1.375rem;--fs-2xl:1.75rem;--fs-3xl:clamp(2rem,4.2vw,2.75rem);--fs-4xl:clamp(2.6rem,6.4vw,4.4rem);
+  /* space (4pt) */
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;--s8:64px;--s9:96px;
+  /* shape + depth */
+  --r-sm:8px;--r:12px;--r-lg:18px;--r-xl:24px;
+  --sh-1:0 1px 2px #0a14300f,0 1px 1px #0a14300a;--sh-2:0 6px 20px -6px #0a143026,0 2px 6px #0a14300f;--sh-3:0 24px 60px -20px #0a143059;
+  --ease:cubic-bezier(.2,.7,.2,1);--t:180ms;
+  color:var(--ink);background:var(--paper);font-size:16px;line-height:1.55;text-rendering:optimizeLegibility;
+}
+body{background:var(--paper)}
+p{margin:0 0 var(--s3)}h1,h2,h3,h4{margin:0 0 var(--s3);line-height:1.08;letter-spacing:-.01em}
+.display{font-family:var(--disp);font-weight:800;text-transform:uppercase;letter-spacing:.005em}
+h1.display{font-size:var(--fs-3xl);line-height:1}h2.display{font-size:clamp(1.75rem,3.4vw,2.4rem);line-height:1.02}h3.display{font-size:var(--fs-xl)}
+.display.xl{font-size:var(--fs-4xl);line-height:.94}
+.lead{font-size:var(--fs-lg);line-height:1.6;color:inherit}.small{font-size:var(--fs-sm)}
+.kicker{font:600 var(--fs-xs)/1.2 Inter,system-ui,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--blue-ink)}
+.kicker.orange{color:var(--orange-ink)}
+.appshell .kicker,.hero .kicker,.dark .kicker,.s-dark .kicker{color:var(--sky)}.appshell .kicker.orange,.s-dark .kicker.orange{color:var(--orange-2)}
+.note{background:#FFF6DB;color:#4A3500;border:1px dashed #B98A00;border-radius:var(--r-sm);padding:var(--s2) var(--s3)}
+
+/* focus + a11y */
+:focus-visible{outline:3px solid var(--sun);outline-offset:3px;border-radius:6px}
+::selection{background:#FF5E1A33}
+
+/* ---------- buttons ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);min-height:44px;padding:10px 20px;border-radius:var(--r);border:1.5px solid transparent;
+  background:var(--orange);color:var(--ink);font:600 var(--fs-md)/1.2 Inter,system-ui,sans-serif;letter-spacing:0;text-transform:none;text-decoration:none;cursor:pointer;
+  box-shadow:0 1px 0 #ffffff40 inset,0 6px 16px -6px #FF5E1A99;transition:transform var(--t) var(--ease),box-shadow var(--t) var(--ease),background var(--t) var(--ease),color var(--t)}
+.btn:hover{background:var(--orange-2);transform:translateY(-1px);box-shadow:0 1px 0 #ffffff40 inset,0 10px 22px -8px #FF5E1Aaa}
+.btn:active{transform:translateY(0);box-shadow:none}
+.btn:disabled,.btn[aria-disabled=true]{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
+.btn.lg{min-height:52px;padding:14px 26px;font-size:var(--fs-lg);border-radius:14px}
+.btn.sm{min-height:36px;padding:6px 14px;font-size:var(--fs-sm);box-shadow:none;border-radius:10px}
+.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line);box-shadow:none}.btn.ghost:hover{background:#fff;border-color:#C5CEE0}
+.btn.outline{background:transparent;color:#fff;border-color:#ffffff59;box-shadow:none}.btn.outline:hover{background:#ffffff14;border-color:#fff}
+.appshell .btn.ghost,.s-dark .btn.ghost,.hero .btn.ghost{color:#fff;border-color:#ffffff40}.appshell .btn.ghost:hover,.s-dark .btn.ghost:hover{background:#ffffff12}
+.btn.quiet{background:transparent;box-shadow:none;color:var(--blue-ink);padding-inline:var(--s2)}
+.link{color:var(--blue-ink);font:600 var(--fs-sm) Inter,system-ui,sans-serif}.appshell .link{color:var(--sky)}
+
+/* ---------- chips, pills, segments ---------- */
+.chip{border:1px solid var(--line);border-radius:999px;padding:6px 12px;font:600 var(--fs-sm) Inter,system-ui,sans-serif;background:#fff;color:var(--ink);transition:background var(--t),border-color var(--t),transform var(--t)}
+.chip:hover{transform:none;border-color:#B9C3D8}.chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.pill{font:600 var(--fs-xs)/1 Inter,system-ui,sans-serif;letter-spacing:.02em;text-transform:none;padding:5px 9px;border-radius:999px}
+.seg button{font:600 var(--fs-sm) Inter,system-ui,sans-serif;letter-spacing:0;text-transform:none;border-radius:8px}
+
+/* ---------- surfaces ---------- */
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);padding:var(--s5);box-shadow:var(--sh-1)}
+.panel{border-radius:var(--r-lg);padding:var(--s5)}
+.appshell .panel{background:var(--night-2);border:1px solid var(--line-dark);box-shadow:none}
+.coachshell .panel,.paper .panel{background:#fff;border:1px solid var(--line);box-shadow:var(--sh-1)}
+.empty{border:1.5px dashed var(--line);border-radius:var(--r-lg);padding:var(--s5);text-align:left;color:var(--dim)}
+.appshell .empty{border-color:#ffffff2e;color:var(--lt)}
+
+/* ---------- forms ---------- */
+label{font-weight:600;font-size:var(--fs-sm)}
+.input{border:1.5px solid var(--line);border-radius:var(--r);padding:11px 14px;font:400 var(--fs-md) Inter,system-ui,sans-serif;transition:border-color var(--t),box-shadow var(--t);min-height:44px}
+.input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 4px #2E6BFF26}
+.input::placeholder{color:#8A94AD}
+.errtext{color:var(--red);font-weight:600;font-size:var(--fs-sm)}
+
+/* ---------- app chrome ---------- */
+.appshell{background:linear-gradient(180deg,var(--night) 0,#0B1736 100%)}
+.tabbar{background:#070F26f0;border-top:1px solid #ffffff1a;padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+.demobar{border-bottom:1px solid #FF5E1A80;font-size:var(--fs-xs)}
+.demobar .seg button{padding:5px 10px}
+
+/* ---------- motion ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.rise{animation:rise .5s var(--ease) both}.rise.d1{animation-delay:.06s}.rise.d2{animation-delay:.12s}.rise.d3{animation-delay:.18s}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+/* auth + google */
+.notice{background:#EAF1FF;color:#0F2F7A;border:1px solid #BFD3FF;border-radius:var(--r);padding:var(--s3) var(--s4);font-size:var(--fs-sm)}
+.btn.google{background:#fff;color:#1F2937;border-color:#D7DCE6;width:100%;gap:10px}.btn.google:hover{background:#F8FAFD}
+.authalt{display:grid;gap:var(--s3);margin:var(--s4) 0}.authalt .or{display:flex;align-items:center;gap:var(--s3);color:var(--dim);font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.12em}.authalt .or::before,.authalt .or::after{content:"";flex:1;height:1px;background:var(--line)}
+.gsim-list{list-style:none;padding:0;margin:var(--s4) 0;display:grid;gap:var(--s2)}.gsim-list button{width:100%;display:flex;gap:var(--s3);align-items:center;text-align:left;background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:var(--s3) var(--s4);cursor:pointer;color:var(--ink);transition:border-color var(--t),background var(--t)}
+.gsim-list button:hover{border-color:var(--blue);background:#F6F9FF}.gsim-list small{display:block;color:var(--dim)}.gsim-av{width:36px;height:36px;border-radius:50%;background:var(--court);color:#fff;display:grid;place-items:center;font-weight:700;flex:none}
+.flow .btn.ghost,.appshell .btn.ghost{color:#fff;border-color:#ffffff47}.flow .btn.ghost:hover{background:#ffffff12}
+.flow .kicker.orange,.appshell .kicker.orange,.s-dark .kicker.orange,.hero .kicker.orange{color:var(--orange-2)}
+.flow .btn.google,.appshell .btn.google{color:#1F2937;background:#fff;border-color:#fff}
+/* navigation type: calm, readable, sentence case */
+.tabbar a{font:600 .72rem/1.2 Inter,system-ui,sans-serif;letter-spacing:.01em;text-transform:none}
+.side nav a{font:500 var(--fs-sm)/1.2 Inter,system-ui,sans-serif;letter-spacing:0;text-transform:none;padding:10px 12px}
+.side nav a.active{font-weight:600}

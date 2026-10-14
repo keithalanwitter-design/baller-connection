@@ -127,4 +127,8 @@ await dana.go('/account'); await dana.pg.getByRole('button', { name: 'Sign out e
 // sign out
 await player.pg.getByRole('button', { name: 'Sign out' }).click(); await player.pg.waitForURL(/login/); ok(!(await cookies(player)), 'sign out clears the session');
 
+// v8 Google sign-in on the real server: without GOOGLE_CLIENT_ID it is off and says so (the full OIDC flow is covered with a mocked JWKS in tests/google.test.ts)
+{ const r = await fetch(API + '/api/auth/google/start', { redirect: 'manual' }); ok(r.status === 302 && /google=off/.test(r.headers.get('location') ?? ''), 'live: Google start without client id → explained, no redirect to Google');
+  ok((await (await fetch(API + '/api/health')).json()).google === false, 'live: /api/health reports google:false');
+  await visitor.go('/login?google=off'); ok(/isn’t set up/.test(await visitor.pg.locator('#google-msg').innerText()), 'live: sign-in page explains Google is off'); }
 if (errs.length) throw new Error(errs.join('\n')); console.log('E2E MULTI OK'); await b.close();

@@ -10,6 +10,8 @@ import { makeProvider, ProviderError, type EmailEnv } from './email';
 import { StripeClient, priceId, priceToTier, signStripe, stripeMode, verifyStripe, type StripeEnv } from './stripe';
 import { pushDecision, validPushEndpoint } from '../shared/push';
 import { pushMode, sendPush, type PushEnv } from './push';
+import { clearOAuthCookie, exchangeCode, googleOn, googleStart, readOAuthCookie, verifyIdToken, type GoogleEnv } from './google';
+import { googleLink } from '../shared/google';
 import { CATEGORY, MAX_ATTEMPTS, RETRY_BACKOFF_MS, quietUntil, render, wants, type EmailData, type EmailKind } from '../shared/emails';
 import { checkoutBlock, mockPriceToTier, mockStripeEvents, stripeToCommand, subscriptionOf, TIERS, type MockOutcome } from '../shared/billing';
 import type { EmailCategory, Tier } from '../shared/domain';
@@ -18,7 +20,7 @@ import { playerCsv, calendarIcs } from './export';
 import type { BlobStore } from './blobs';
 import { CLIP_MAX_BYTES, canSeeClip, clipError, normalizeMime, sniffMime, videoDuration } from '../shared/clips';
 
-export interface Env extends EmailEnv, StripeEnv, PushEnv { DB: Db; SESSION_SECRET?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string; /** Clip bytes: R2 (Worker) or local disk (Node). Without it, uploads answer 503. */ BLOBS?: BlobStore }
+export interface Env extends EmailEnv, StripeEnv, PushEnv, GoogleEnv { DB: Db; SESSION_SECRET?: string; APP_URL?: string; DEMO?: string; ALLOW_ORIGIN?: string; SEED?: string; OWNER_EMAIL?: string; OWNER_NAME?: string; /** Clip bytes: R2 (Worker) or local disk (Node). Without it, uploads answer 503. */ BLOBS?: BlobStore }
 class HttpError extends Error { status: number; constructor(status: number, msg: string) { super(msg); this.status = status; } }
 const SYSTEM_ONLY = new Set(['sweep', 'advanceClock']);
 /** Never accepted from a browser: billing state only changes through a verified Stripe webhook (or the test-mode simulator, which signs its events the same way). */
@@ -121,7 +123,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   const need = async (ep: Endpoint) => { const a = await me(); if (!a) throw new HttpError(401, 'Sign in required'); if (!ENDPOINT_ROLES[ep].includes(a.role)) throw new HttpError(403, `${a.role} can’t access ${ep}`); return a; };
   try {
     await ensureSeeded(env);
-    if (path === '/api/health') return json({ ok: true, version: await repo.version(), demo: env.DEMO === '1', email: makeProvider(env).name, stripe: stripeMode(env), push: pushMode(env) });
+    if (path === '/api/health') return json({ ok: true, version: await repo.version(), demo: env.DEMO === '1', email: makeProvider(env).name, stripe: stripeMode(env), push: pushMode(env), google: googleOn(env) });
     if (path === '/api/workflow') return json({ transitions: TRANSITIONS });
     // ---------- auth ----------
     if (path === '/api/auth/login' && req.method === 'POST') {
@@ -133,6 +135,26 @@ export async function handle(req: Request, env: Env): Promise<Response> {
     }
     if (path === '/api/auth/logout' && req.method === 'POST') { const t = readToken(req); if (t) await repo.deleteSession(await hmac(secret, t)); return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }); }
     if (path === '/api/auth/logout-all' && req.method === 'POST') { const a = await me(); if (a) { await repo.endAllSessions(a.id); await repo.deleteUserPushSubs(a.id); } return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }); }
+    // ---------- v8 Google sign-in (OIDC code flow + PKCE). Links to existing accounts only. ----------
+    if (path === '/api/auth/google/start') {
+      if (!googleOn(env)) return Response.redirect(`${app}/#/login?google=off`, 302);
+      const g = await googleStart(env, app, secret, url.searchParams.get('next') ?? '', secure);
+      return new Response(null, { status: 302, headers: { location: g.url, 'set-cookie': g.cookie, 'cache-control': 'no-store' } });
+    }
+    if (path === '/api/auth/google/callback') {
+      const back = (q: string, extra: Record<string, string> = {}) => { const h = new Headers({ location: `${app}/#${q}`, 'cache-control': 'no-store', ...extra }); h.append('set-cookie', clearOAuthCookie(secure)); return new Response(null, { status: 302, headers: h }); };
+      if (!googleOn(env)) return back('/login?google=off');
+      const st = await readOAuthCookie(req, secret); const code = url.searchParams.get('code');
+      if (!st || !code || url.searchParams.get('state') !== st.state) return back('/login?google=error');
+      let claims;
+      try { claims = await verifyIdToken(await exchangeCode(env, app, code, st.verifier), { clientId: env.GOOGLE_CLIENT_ID!, nonce: st.nonce }); } catch { return back('/login?google=error'); }
+      const s = await repo.load(); const out = googleLink(s, await repo.googleIdentities(), claims);
+      if (out.kind === 'invite') return back('/invite?google=invite');
+      if (out.kind === 'refuse') return back(`/login?google=${out.reason}`);
+      await repo.linkGoogle(claims.sub, out.userId, claims.email); const sess = await startSession(out.userId);
+      const role = out.role; const home = role === 'head' || role === 'assistant' ? '/coach' : role === 'ops' ? '/ops' : role === 'parent' ? '/parent' : '/app';
+      const h = new Headers({ location: `${app}/#${st.next || home}`, 'cache-control': 'no-store' }); h.append('set-cookie', sess['set-cookie']); h.append('set-cookie', clearOAuthCookie(secure)); return new Response(null, { status: 302, headers: h });
+    }
     // ---------- v6 magic links: hashed, 15 min, single use; same answer whether or not the account exists ----------
     if (path === '/api/auth/magic' && req.method === 'POST') {
       const b = await body<{ email?: string }>(); const email = (b.email ?? '').trim().toLowerCase(); const pair = `magic:${email}|${ip}`; const ipKey = `magic-ip:${ip}`;
@@ -302,7 +324,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   }
 }
 async function wipe(db: Db) {
-  const tables = ['events', 'timeline_notes', 'wins', 'games', 'billing_events', 'subscriptions', 'push_subscriptions', 'magic_tokens', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
+  const tables = ['events', 'timeline_notes', 'wins', 'games', 'billing_events', 'subscriptions', 'push_subscriptions', 'oauth_identities', 'magic_tokens', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
   await db.batch([db.prepare('PRAGMA defer_foreign_keys = ON'), ...tables.map((t) => db.prepare(`DELETE FROM ${t}`))]);
 }
 export type { Snapshot };

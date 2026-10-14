@@ -87,3 +87,5 @@ export class HttpApi implements BallerApi {
 /** Live mode when the build points at an API (VITE_API_URL, or "same-origin" when the Worker serves the app); `?demo=1` always forces the demo. */
 export function isDemo() { const q = new URLSearchParams(location.search); if (q.get('demo') === '1') sessionStorage.setItem('bc-demo', '1'); if (q.get('demo') === '0') sessionStorage.removeItem('bc-demo'); return sessionStorage.getItem('bc-demo') === '1' || !import.meta.env.VITE_API_URL; }
 export function makeApi(): BallerApi { const b = import.meta.env.VITE_API_URL as string | undefined; return isDemo() || !b ? new DemoApi() : new HttpApi(b === 'same-origin' ? '' : b.replace(/\/$/, '')); }
+/** Where the API lives (for full-page redirects such as Google sign-in). */
+export function apiBase() { const b = import.meta.env.VITE_API_URL as string | undefined; return !b || b === 'same-origin' ? '' : b.replace(/\/$/, ''); }

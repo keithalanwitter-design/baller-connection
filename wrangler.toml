@@ -12,7 +12,7 @@ run_worker_first = ["/api/*"]
 
 [vars]
 APP_URL = "https://baller-connection.YOUR-SUBDOMAIN.workers.dev"
-EMAIL_PROVIDER = "log"          # log (default: nothing leaves the server) | resend | postmark
+EMAIL_PROVIDER = "resend"       # resend (default) | postmark | log. Without RESEND_API_KEY nothing leaves the server (mail is kept in the staff outbox).
 EMAIL_FROM = "Baller Connection <coach@YOUR-DOMAIN>"   # must be on a domain verified with the provider (SPF + DKIM, see DEPLOY.md)
 DEMO = "0"
 # v6 Stripe price ids (test mode). Create them with: STRIPE_SECRET_KEY=sk_test_... npm run stripe:setup
@@ -22,6 +22,8 @@ STRIPE_PRICE_INNER_CIRCLE = ""
 # v7 Web Push (optional; empty = log mode). Generate with: node scripts/vapid-keys.mjs. The private key goes in `wrangler secret put VAPID_PRIVATE_KEY`.
 VAPID_PUBLIC_KEY = ""
 VAPID_SUBJECT = ""
+# v8 Google sign-in (optional; empty = button explains it is not set up). Secret: `wrangler secret put GOOGLE_CLIENT_SECRET`. See DEPLOY.md 3b-g.
+GOOGLE_CLIENT_ID = ""
 # Secrets (never in this file):
 #   wrangler secret put SESSION_SECRET
 #   wrangler secret put RESEND_API_KEY        (or POSTMARK_SERVER_TOKEN)
