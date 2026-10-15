@@ -73,7 +73,7 @@ describe('email templates', () => {
 
 describe('preferences, quiet hours, unsubscribe', () => {
   it('engine skips categories a user turned off (essential always goes) and stamps notifications it emailed', () => {
-    let s = run(seed(), CHRIS, { type: 'setEmailPrefs', prefs: { coaching: false, quietStart: 0, quietEnd: 0 } });
+    let s = run(seed(), CHRIS, { type: 'setEmailPrefs', prefs: { coaching: false, parentCopy: true, quietStart: 0, quietEnd: 0 } });
     s = run(s, { id: 'u_riley', role: 'player', playerId: 'riley', familyId: 'f_moss' }, { type: 'setEmailPrefs', prefs: { quietStart: 0, quietEnd: 0 } });
     s = run(s, HEAD, { type: 'review', playerId: 'riley', decision: 'approve', wentWell: 'Feet set', adjust: 'Hold the follow-through', why: 'Arc' });
     const fr = s.outbox.filter((m) => m.kind === 'feedback-ready'); expect(fr.map((m) => m.to)).toEqual(['riley@demo.test']); expect(fr[0].sendAfter).toBeNull();
@@ -95,7 +95,7 @@ describe('preferences, quiet hours, unsubscribe', () => {
     const dana = (await head.get('/api/snapshot')).body.snapshot.users.find((u: { id: string }) => u.id === 'u_dana'); expect(dana.prefs.digest).toBe(false); expect(dana.prefs.coaching).toBe(true);
     const sent: { url: string; body: Record<string, unknown> }[] = []; const fake = (async (u: string, init: RequestInit) => { sent.push({ url: u, body: JSON.parse(String(init.body)) }); return new Response('{}', { status: 200 }); }) as unknown as typeof fetch;
     await queueEmail(env, 'feedback-ready', 'dana@demo.test', { player: 'Avery', coach: 'Jamie', rep: 'x', snippet: 'y' }, 'u_dana'); await deliver(env, fake);
-    const m = sent.find((x) => (x.body.subject as string).includes('Feedback is in'))!; expect(m.url).toBe('https://api.resend.com/emails'); expect(m.body.html).toContain('https://app.test/#/app');
+    const m = sent.find((x) => (x.body.subject as string).includes('wrote back to'))!; expect(m.url).toBe('https://api.resend.com/emails'); expect(m.body.html).toContain('https://app.test/#/app');
     expect((m.body.headers as Record<string, string>)['List-Unsubscribe']).toMatch(/^<https:\/\/app\.test\/api\/unsubscribe\?u=u_dana&c=coaching&s=[a-f0-9]{32}>$/); expect((m.body.headers as Record<string, string>)['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click');
     expect(m.body.text).not.toContain('{{'); expect(await queueEmail(env, 'parent-digest', 'dana@demo.test', { playerFirst: 'Avery', text: 'x' }, 'u_dana')).toBe(false); // digest is off now
   });
@@ -168,7 +168,7 @@ describe('Stripe webhook: signature, idempotency, entitlements', () => {
   });
   it('checkout completed pays the invited family; onboarding needs payment (comp skips)', () => {
     let s = run(seed(), { id: 'public', role: 'public' }, { type: 'acceptInvite', token: DEMO_INVITE.token, parentName: 'Robin Banks', email: 'robin@demo.test', userId: 'u_robin' });
-    const ROBIN: Actor = { id: 'u_robin', role: 'parent', familyId: 'f_banks' }; const ob: Command = { type: 'completeOnboarding', playerId: 'theo', position: 'Guard', goal: 'Handle', learnStyle: 'Watch', rhythm: '3 days' };
+    const ROBIN: Actor = { id: 'u_robin', role: 'parent', familyId: 'f_banks' }; const ob: Command = { type: 'completeOnboarding', agreed: true, playerId: 'theo', position: 'Guard', goal: 'Handle', learnStyle: 'Watch', rhythm: '3 days' };
     s = run(s, ROBIN, { type: 'recordConsent', playerId: 'theo', guardianName: 'Robin Banks', agreed: true }); expect(() => run(s, ROBIN, ob)).toThrow(/pay first/);
     expect(s.outbox.some((m) => m.kind === 'consent-request' && m.to === 'robin@demo.test')).toBe(true);
     const evs = mockStripeEvents(s, 'theo', 'checkout', 'Development'); for (const e of evs) s = run(s, SYS, stripeToCommand(e, mockPriceToTier)!);

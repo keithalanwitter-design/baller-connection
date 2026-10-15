@@ -13,14 +13,14 @@ describe('multi-user API flow with real sessions', () => {
     const token = mail.body.match(/token=([a-f0-9]+)/)[1];
     const lou = client(env); expect((await lou.post('/api/auth/accept-invite', { token, parentName: 'Lou Rook', email: 'lou@demo.test', password: 'short' })).status).toBe(400);
     expect((await lou.post('/api/auth/accept-invite', { token, parentName: 'Lou Rook', email: 'lou@demo.test', password: 'kai-is-great-1' })).status).toBe(200);
-    expect((await lou.cmd({ type: 'completeOnboarding', playerId: kai, position: 'Wing', goal: 'Finish left', learnStyle: 'Video', rhythm: '3 days' })).status).toBe(409);
+    expect((await lou.cmd({ type: 'completeOnboarding', agreed: true, playerId: kai, position: 'Wing', goal: 'Finish left', learnStyle: 'Video', rhythm: '3 days' })).status).toBe(409);
     expect((await lou.cmd({ type: 'recordConsent', playerId: kai, guardianName: 'Lou Rook', agreed: true })).status).toBe(200);
     expect((await lou.post('/api/billing/simulate', { playerId: kai, outcome: 'checkout' })).status).toBe(200);
-    expect((await lou.cmd({ type: 'completeOnboarding', playerId: kai, position: 'Wing', goal: 'Finish left', learnStyle: 'Video', rhythm: '3 days' })).status).toBe(200);
+    expect((await lou.cmd({ type: 'completeOnboarding', agreed: true, playerId: kai, position: 'Wing', goal: 'Finish left', learnStyle: 'Video', rhythm: '3 days' })).status).toBe(200);
     expect((await lou.post('/api/auth/player-login', { playerId: kai, username: 'kai.rook', pin: '4321' })).status).toBe(200);
     const asst = await login(env, 'assistant@demo.test');
-    expect((await asst.get('/api/queue')).body.coach.some((q: { player: { id: string }; kind: string }) => q.player.id === kai && q.kind === 'Plan needed')).toBe(true);
-    expect((await asst.cmd({ type: 'publishPlan', playerId: kai, focus: 'Left-hand finishing', drillIds: ['d2', 'd1'] })).status).toBe(200);
+    expect((await asst.get('/api/queue')).body.coach.some((q: { player: { id: string }; kind: string }) => q.player.id === kai && q.kind === 'First look')).toBe(true);
+    expect((await asst.cmd({ type: 'publishPlan', saw: 'Quick hands, eyes drop under pressure.', playerId: kai, focus: 'Left-hand finishing', drillIds: ['d2', 'd1'] })).status).toBe(200);
     const kaiC = await login(env, 'kai.rook', '4321', true);
     expect((await kaiC.cmd({ type: 'openPlan', playerId: kai })).status).toBe(200);
     expect((await kaiC.cmd({ type: 'submitRep', playerId: kai, repsDone: 3, reflection: 'Left hand felt better by set 3', linkUrl: 'https://example.com/clip' })).status).toBe(200);

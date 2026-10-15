@@ -1,6 +1,5 @@
-// v7: game log, practice-to-game transfer, confidence, shooting log. Pure helpers (no engine/workflow imports).
-import type { FocusTried, Game, GameStats, Player, Snapshot, Submission } from './domain';
-import { weekKey } from './time';
+// v7/v9: game notes, how a game felt, shooting log. Pure helpers (no engine/workflow imports).
+import type { Game, GameStats, Player, Snapshot, Submission } from './domain';
 
 export const SPOTS = ['Left corner', 'Left wing', 'Top', 'Right wing', 'Right corner'] as const;
 /** Under-13 players get the emoji scale and a shorter stat list. */
@@ -11,8 +10,6 @@ export const STAT_LABEL: Record<keyof GameStats, string> = { min: 'Minutes', pts
 /** Growth language, not grades. */
 export const FEEL_WORDS = ['', 'Rough', 'Unsure', 'Steady', 'Confident', 'Locked in'];
 export const FEEL_EMOJI = ['', '😟', '😕', '😐', '🙂', '😄'];
-export const TRIED_LABEL: Record<FocusTried, string> = { yes: 'Yes', sometimes: 'Sometimes', not_yet: 'Not yet' };
-export const TRIED_SCORE: Record<FocusTried, number> = { yes: 1, sometimes: 0.5, not_yet: 0 };
 
 export function cleanStats(st: GameStats = {}): GameStats {
   const out: GameStats = {};
@@ -25,26 +22,12 @@ export const pct = (m?: number | null, a?: number | null) => (a ? Math.round(((m
 export const gamesOf = (s: Snapshot, pid: string) => (s.games ?? []).filter((g) => g.playerId === pid).sort((a, b) => a.date.localeCompare(b.date) || a.at.localeCompare(b.at));
 export const gameLine = (g: Game) => { const st = g.stats ?? {}; const bits = [st.pts != null && `${st.pts} pts`, st.reb != null && `${st.reb} reb`, st.ast != null && `${st.ast} ast`, st.fga ? `FG ${st.fgm ?? 0}/${st.fga}` : null].filter(Boolean); return bits.length ? bits.join(' · ') : 'No stats (that’s fine)'; };
 
-/** Practice-to-game transfer: did the weekly focus show up in games? yes = 1, sometimes = ½, not yet = 0. */
-export function transfer(s: Snapshot, pid: string, cycleId?: string | null) {
-  const gs = gamesOf(s, pid).filter((g) => g.focusTried && (cycleId === undefined || g.cycleId === cycleId));
-  const yes = gs.filter((g) => g.focusTried === 'yes').length; const sometimes = gs.filter((g) => g.focusTried === 'sometimes').length; const notYet = gs.length - yes - sometimes;
-  const rate = gs.length ? (yes + sometimes * 0.5) / gs.length : null;
-  return { games: gs.length, yes, sometimes, notYet, rate, pct: rate === null ? null : Math.round(rate * 100), label: rate === null ? 'No games logged yet' : `Focus showed up in ${yes}${sometimes ? ` (+${sometimes} sometimes)` : ''} of ${gs.length} game${gs.length === 1 ? '' : 's'}` };
-}
 const currentCycle = (s: Snapshot, pid: string) => s.cycles.filter((c) => c.playerId === pid).sort((a, b) => b.index - a.index)[0];
-/** Coach cue: 2+ games this cycle and the focus shows up less than half the time (and the coach hasn't marked it handled). */
-export function transferCue(s: Snapshot, p: Player) {
-  const c = currentCycle(s, p.id); if (!c || c.status !== 'active') return null; const t = transfer(s, p.id, c.id);
-  if (t.games < 2 || (t.rate ?? 1) >= 0.5) return null; if ((s.timelineNotes ?? []).some((n) => n.playerId === p.id && n.kind === 'cue' && n.refId === c.id)) return null;
-  return { cycle: c, ...t };
-}
 /** Confidence dropped two games in a row (a > b > c across the last three games). A gentle, coach-only flag. */
 export function confidenceDip(s: Snapshot, pid: string) {
   const gs = gamesOf(s, pid).slice(-3); if (gs.length < 3) return null;
   const [a, b, c] = gs.map((g) => g.confidence); if (!(a > b && b > c)) return null; return { games: gs, values: [a, b, c], last: gs[2] };
 }
-export function confidenceTrend(s: Snapshot, pid: string) { const gs = gamesOf(s, pid); if (gs.length < 2) return null; const h = Math.ceil(gs.length / 2); const avg = (x: Game[]) => x.reduce((n, g) => n + g.confidence, 0) / x.length; return { from: +avg(gs.slice(0, gs.length - h || 1)).toFixed(1), to: +avg(gs.slice(-h)).toFixed(1) }; }
 
 /** 5-spot shooting log summary. */
 export function shotStats(shots?: number[][] | null) {
@@ -66,5 +49,3 @@ export function gamePlan(s: Snapshot, p: Player) {
   const a = s.assignments.filter((x) => x.playerId === p.id && (x.status === 'open' || x.status === 'submitted'))[0];
   return { focus: c?.focus ?? null, cue: r?.adjust || a?.cues?.[0] || null, affirmation: p.affirmation?.trim() || null, suggestion: p.workingOn?.trim() || (p.proudOf ? `I’m the player who ${p.proudOf.replace(/^I /i, '').toLowerCase()}` : 'I’ve done the reps. I trust them.') };
 }
-/** Game asks for coach feedback: one per week (they don't use the weekly review allowance). */
-export const gameAsksThisWeek = (s: Snapshot, pid: string, now: Date) => (s.games ?? []).filter((g) => g.playerId === pid && g.wantsReply && weekKey(new Date(g.at)) === weekKey(now)).length;

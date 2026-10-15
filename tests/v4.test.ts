@@ -32,8 +32,10 @@ describe('personalization', () => {
     let s = run(seed(), { id: 'public', role: 'public' }, { type: 'submitApplication', playerName: 'Kai Rook', parentName: 'Lou Rook', email: 'lou@x.test', answers: { age: '13–14', days: '3–4 days', need: 'Plan + regular feedback', goal: 'x' }, next: 'apply' }); const kai = s.players.at(-1)!.id;
     const r = dispatch(s, { type: 'createInvite', playerId: kai }, OPS); s = r.snapshot; s = dispatch(s, { type: 'acceptInvite', code: r.created!.inviteCode, userId: 'u_lou' }, { id: 'public', role: 'public' }).snapshot;
     const LOU: Actor = { id: 'u_lou', role: 'parent', familyId: P(s, kai).familyId }; s = dispatch(s, { type: 'billingEvent', eventId: 'evt_v4', kind: 'checkout_completed', playerId: kai }, { id: 'system', role: 'system' }).snapshot;
-    s = run(s, LOU, { type: 'recordConsent', playerId: kai, guardianName: 'Lou Rook', agreed: true }, { type: 'completeOnboarding', playerId: kai, position: 'Guard', goal: 'Start for my school team', learnStyle: 'Explain the why', rhythm: '3 days', frustration: 'Missing free throws late', proudOf: 'My defense' });
-    expect(P(s, kai).frustration).toBe('Missing free throws late'); expect(s.messages.at(-1)!.text).toMatch(/proud of My defense/);
+    s = run(s, LOU, { type: 'recordConsent', playerId: kai, guardianName: 'Lou Rook', agreed: true }, { type: 'completeOnboarding', agreed: true, playerId: kai, position: 'Guard', goal: 'Start for my school team', learnStyle: 'Explain the why', rhythm: '3 days', frustration: 'Missing free throws late', proudOf: 'My defense' });
+    expect(P(s, kai).frustration).toBe('Missing free throws late'); expect(P(s, kai).proudOf).toBe('My defense');
+    // v9: no auto-written “coach” welcome. The first thing the family hears from the coach is the coach’s own first look.
+    expect(s.messages.some((m) => m.playerId === kai && m.from === 'coach')).toBe(false);
   });
   it('feedback template and composed order adapt to learning style; parents get plain language', () => {
     const s = seed(); expect(feedbackTemplate(P(s, 'riley')).mode).toBe('why-first'); expect(feedbackTemplate(P(s, 'avery')).mode).toBe('show-me'); expect(feedbackTemplate(P(s, 'sam')).mode).toBe('short-steps');
@@ -49,7 +51,7 @@ describe('unified feedback → messaging → queue', () => {
     expect(r.nextRep).toBe('Two-ball rhythm'.length ? r.nextRep : ''); expect(r.feedback).toContain('Eyes up'); expect(r.linkUrl).toBe('https://example.com/clip');
     s = run(s, AVERY, { type: 'reactFeedback', playerId: 'avery', reviewId: r.id, reaction: 'question', question: 'Eyes up on which hand?' });
     const m = s.messages.at(-1)!; expect(m).toMatchObject({ context: 'feedback', refId: r.id, from: 'player', answered: false }); expect(m.dueBy).toBeTruthy();
-    const item = buildQueue(s, 'u_head').find((q) => q.kind === 'Reply needed' && q.player.id === 'avery')!; expect(item.what).toMatch(/Question on feedback/); expect(item.dueBy).toBe(m.dueBy);
+    const item = buildQueue(s, 'u_head').find((q) => q.kind === 'Reply needed' && q.player.id === 'avery')!; expect(item.what).toMatch(/On your feedback/); expect(item.dueBy).toBe(m.dueBy);
     expect(s.notifications.some((n) => n.type === 'question' && n.userId === 'u_head')).toBe(true);
     s = run(s, HEAD, { type: 'sendMessage', playerId: 'avery', text: 'Left hand.', context: 'feedback', refId: r.id }); expect(buildQueue(s, 'u_head').some((q) => q.kind === 'Reply needed' && q.player.id === 'avery')).toBe(false);
   });
@@ -72,10 +74,10 @@ describe('message SLA + contexts', () => {
 describe('weekly rhythm', () => {
   it('maps days to the rhythm', () => { expect(rhythmToday(new Date('2026-10-12T10:00')).key).toBe('plan-drop'); expect(rhythmToday(new Date('2026-10-14T10:00')).key).toBe('midweek'); expect(rhythmToday(new Date('2026-10-16T10:00')).key).toBe('wrap'); expect(rhythmToday(new Date('2026-10-18T10:00')).key).toBe('digest'); expect(rhythmToday(new Date('2026-10-13T10:00')).key).toBe('rest'); });
   it('sweep sends plan-drop, mid-week and Friday wrap nudges once per week', () => {
-    let s = toDay(seed(), 1); expect(s.notifications.filter((n) => n.type === 'rhythm' && n.userId === 'u_avery' && /Plan drop/.test(n.text)).length).toBe(1);
-    s = run(s, SYS, { type: 'sweep' }, { type: 'sweep' }); expect(s.notifications.filter((n) => n.type === 'rhythm' && n.userId === 'u_avery' && /Plan drop/.test(n.text)).length).toBe(1);
-    s = toDay(s, 3); expect(s.notifications.some((n) => n.type === 'rhythm' && n.userId === 'u_head' && /no check-in yet/.test(n.text))).toBe(true);
-    s = toDay(s, 5); expect(s.notifications.some((n) => n.type === 'rhythm' && n.userId === 'u_avery' && /Friday wrap/.test(n.text))).toBe(true);
+    let s = toDay(seed(), 1); expect(s.notifications.filter((n) => n.type === 'rhythm' && n.userId === 'u_avery' && /New week/.test(n.text)).length).toBe(1);
+    s = run(s, SYS, { type: 'sweep' }, { type: 'sweep' }); expect(s.notifications.filter((n) => n.type === 'rhythm' && n.userId === 'u_avery' && /New week/.test(n.text)).length).toBe(1);
+    s = toDay(s, 3); expect(s.notifications.some((n) => n.type === 'rhythm' && n.userId === 'u_head' && /no check-in/i.test(n.text))).toBe(false); // v9: the coach isn’t handed a list of who to chase
+    s = toDay(s, 5);
     s = run(s, AVERY, { type: 'weeklyReflection', playerId: 'avery', text: 'Left hand is getting there.', feel: 4 }); s = run(s, SYS, { type: 'generateDigests' }); expect(s.digests.find((d) => d.playerId === 'avery')!.text).toMatch(/In Avery’s words: “Left hand is getting there.”/);
   });
 });
@@ -83,9 +85,9 @@ describe('weekly rhythm', () => {
 describe('cycle review', () => {
   it('player reflection + coach ratings and next focus, then the next plan', () => {
     let s = run(seed(), SYS, { type: 'advanceClock', hours: 24 * 30 }); s = run(s, NIA, { type: 'startNext', playerId: 'nia' }); expect(P(s, 'nia').state).toBe('Cycle review');
-    expect(guide(s, P(s, 'nia'), 'player').action.label).toBe('Do my cycle review');
+    expect(guide(s, P(s, 'nia'), 'player').action.label).toBe('Do my re-check');
     s = run(s, NIA, { type: 'cycleReflection', playerId: 'nia', improved: 'Hesi is automatic', hardest: 'Left side pull-up', wantNext: 'Finishing through contact' });
-    expect(buildQueue(s, 'u_asst').find((q) => q.kind === 'Cycle review')!.what).toMatch(/Hesi is automatic/);
+    expect(buildQueue(s, 'u_asst').find((q) => q.kind === 'Re-check')!.what).toMatch(/Hesi is automatic/);
     s = run(s, ASST, { type: 'completeCycleReview', playerId: 'nia', summary: 'Pace changes are real now.', ratings: { Finishing: 3, 'Shot form': 3 }, nextFocus: 'Finishing through contact' });
     const cr = s.cycleReviews.at(-1)!; expect(cr.ratingsBefore!.Finishing).toBe(2); expect(cr.ratingsAfter!.Finishing).toBe(3); expect(buildQueue(s, 'u_asst').some((q) => q.kind === 'Plan needed' && q.player.id === 'nia')).toBe(true);
     s = run(s, ASST, { type: 'publishPlan', playerId: 'nia', focus: cr.nextFocus!, drillIds: ['d2'] }); expect(s.cycles.filter((c) => c.playerId === 'nia').at(-1)!.index).toBe(2);

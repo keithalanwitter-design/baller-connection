@@ -92,3 +92,42 @@ label{font-weight:600;font-size:var(--fs-sm)}
 .tabbar a{font:600 .72rem/1.2 Inter,system-ui,sans-serif;letter-spacing:.01em;text-transform:none}
 .side nav a{font:500 var(--fs-sm)/1.2 Inter,system-ui,sans-serif;letter-spacing:0;text-transform:none;padding:10px 12px}
 .side nav a.active{font-weight:600}
+
+/* ==========================================================================
+   v9: a coach who sees your reps between sessions
+   ========================================================================== */
+.stuckfab{position:fixed;right:14px;bottom:calc(76px + env(safe-area-inset-bottom));z-index:60;background:#fff;color:var(--ink);border:2px solid var(--orange);border-radius:999px;padding:10px 16px;min-height:44px;font:600 var(--fs-sm)/1 Inter,system-ui,sans-serif;box-shadow:0 10px 24px -8px #000a;cursor:pointer;letter-spacing:0;text-transform:none}
+.stuckfab:hover{background:#FFF3EC}
+.sheet.stuck{max-height:88vh;overflow:auto;text-align:left}.sheet.stuck h2{font-size:1.5rem}.sheet.stuck label{display:block;margin-top:var(--s3)}.sheet.stuck textarea{width:100%}
+.tback{background:#0F1D45;border:1px solid #2a428a;border-radius:var(--r-lg);padding:var(--s4);margin:var(--s3) 0;text-align:left}
+.coachshell .tback,.paper .tback{background:#F4F8FF;border-color:#BFD3FF;color:var(--ink)}
+.tback h3{margin:0 0 var(--s2)}.tback label{display:block;margin-top:var(--s2)}.tback textarea,.tback input.input{width:100%}
+.tback.done{border-color:var(--green)}.tbquote{font-size:var(--fs-lg);font-style:italic;margin:var(--s2) 0}
+.tback .examples{color:var(--lt);font-size:var(--fs-sm)}.coachshell .tback .examples{color:var(--dim)}
+.sidebyside{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);margin:var(--s3) 0}.sidebyside figure{margin:0}.sidebyside figcaption{font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;margin-bottom:var(--s1);color:var(--lt)}.coachshell .sidebyside figcaption{color:var(--dim)}
+.sidebyside video{width:100%;border-radius:var(--r);background:#000;max-height:260px}
+@media (max-width:620px){.sidebyside{grid-template-columns:1fr}}
+.bigsentence{font:600 var(--fs-xl)/1.3 Inter,system-ui,sans-serif;margin:var(--s2) 0 var(--s3)}
+.tips{list-style:none;padding:0;margin:0;display:grid;gap:var(--s2)}.tips li{padding:10px 12px;border-radius:var(--r);border:1px solid var(--line-dark);font-size:var(--fs-sm)}
+.tips li b{display:inline-block;min-width:3.2em;font-size:var(--fs-xs);letter-spacing:.1em;text-transform:uppercase}.tips li.do b{color:var(--green)}.tips li.dont b{color:#FF8A8A}
+.paper .tips li,.coachshell .tips li{border-color:var(--line)}
+.meetcoach .portrait{width:56px;height:56px;border-radius:50%;background:var(--orange);color:var(--ink);display:grid;place-items:center;font:800 1.4rem var(--disp);flex:none}
+.meetcoach dl{margin:var(--s3) 0 0;display:grid;gap:var(--s3)}.meetcoach dt{font-size:var(--fs-xs);letter-spacing:.12em;text-transform:uppercase;color:var(--orange-2)}.meetcoach dd{margin:2px 0 0}
+.meetcoach .firstlook,.quote.firstlook{border-left:4px solid var(--orange);padding-left:var(--s4);font-style:normal}
+.sessioncard{border-left:4px solid var(--sky)}.rhythmcard .opts,.rhythmpick .opts{grid-template-columns:repeat(auto-fit,minmax(88px,1fr))}.rhythmpick .opt{text-align:center;padding:10px 8px}
+.opts.rough{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}.roughweek.chosen{opacity:.9}
+.gamemark{display:inline-block;padding:2px 10px;border-radius:999px;font-size:var(--fs-xs);font-weight:700;letter-spacing:.04em}
+.mark-carried{background:#DDF6EA;color:#0B6B47}.mark-partly{background:#FFF1CC;color:#7A5300}.mark-not-yet{background:#E7ECF6;color:#34405e}
+.gamecard{border:1px solid var(--line-dark);border-radius:var(--r);padding:var(--s3) var(--s4);margin:var(--s2) 0}.coachshell .gamecard,.paper .gamecard{border-color:var(--line)}
+.scale{display:flex;gap:6px;flex-wrap:wrap}.setsrow{margin:var(--s3) 0}.stepper{display:inline-flex;align-items:center;gap:var(--s3)}.stepper .mini{width:44px;height:44px;border-radius:50%;border:2px solid #ffffff40;background:transparent;color:inherit;font-size:1.3rem;cursor:pointer}
+.fitgrid{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4);margin-top:var(--s3)}.fitgrid ul{margin:var(--s2) 0 0;padding-left:1.1em;font-size:var(--fs-sm)}@media (max-width:620px){.fitgrid{grid-template-columns:1fr}}
+.fitlist{margin:var(--s3) 0;border:1px solid var(--line-dark);border-radius:var(--r);padding:var(--s3) var(--s4)}
+.roles li{margin:var(--s2) 0}.ackchip.q{background:#FFF1CC;color:#7A5300}
+.panel.firstlook{border-left:4px solid var(--orange)}
+@media (max-width:700px){
+  .demobar{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:4px 8px;-webkit-overflow-scrolling:touch}.demobar .demotag{display:none}.demobar .chip,.demobar .seg button{white-space:nowrap;flex:none;min-height:32px;padding:4px 10px}.demobar .seg{flex:none}
+}
+
+/* v9: demo tools collapse on phones so the persona switch is the only thing in the bar */
+.demobar .demomore{display:none}.demobar .demotools{display:contents}
+@media (max-width:760px){.demobar .demomore{display:inline-flex}.demobar:not(.open) .demotools{display:none}.demobar.open{flex-wrap:wrap}}

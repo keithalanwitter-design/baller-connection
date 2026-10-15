@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { UserRole } from '../shared/domain';
 import { Forgot, Invite, Login, Reset, homeFor } from './pages/Auth';
@@ -25,7 +25,7 @@ import { PublicCardPage } from './v7';
 import { UpdateToast } from './pwa';
 import { GoogleSim } from './google';
 function DemoBar() {
-  const loc = useLocation(); const nav = useNavigate(); const { reset, run, as, setDemoRole } = useStore(); const p = loc.pathname;
+  const loc = useLocation(); const nav = useNavigate(); const { reset, run, as, setDemoRole } = useStore(); const p = loc.pathname; const [more, setMore] = useState(false);
   // The route decides the persona; the coach area remembers head vs assistant.
   useEffect(() => {
     const coachFlavor = (localStorage.getItem('bc-demo-coach') as UserRole) || 'head';
@@ -34,16 +34,19 @@ function DemoBar() {
   }, [p]); // eslint-disable-line react-hooks/exhaustive-deps
   const visitor = !/^\/(app|parent|coach|ops|welcome|invite|inbox|log|checkout|billing|account)/.test(p);
   return (
-    <div className="demobar" role="region" aria-label="Demo controls">
+    <div className={`demobar ${more ? 'open' : ''}`} role="region" aria-label="Demo controls">
       <span className="demotag"><i className="dot local" /> Demo · fictional data · in-browser engine</span>
       <div className="seg" role="group" aria-label="View as">
         <button aria-pressed={visitor} className={visitor ? 'on' : ''} onClick={() => nav('/')}>Visitor</button>
         {PERSONAS.map(([r, l, to]) => { const on = !visitor && as?.role === r; return <button key={r} aria-pressed={on} className={on ? 'on' : ''} onClick={() => { if (r === 'head' || r === 'assistant') localStorage.setItem('bc-demo-coach', r); setDemoRole(r); nav(to); }}>{l}</button>; })}
       </div>
+      <button className="chip dark demomore" aria-expanded={more} onClick={() => setMore(!more)}>{more ? 'Less' : 'Tools'}</button>
+      <span className="demotools">
       <button className="chip dark" onClick={() => run({ type: 'advanceClock', hours: 24 })} title="Move the demo clock forward; the SLA sweep runs like the cron job">⏩ +1 day</button>
       <button className="chip dark" onClick={() => run({ type: 'generateDigests' })} title="Run the Sunday digest job now">Run digest job</button>
       <button className={`chip dark ${p.startsWith('/log') ? 'on' : ''}`} onClick={() => nav('/log')}>System log</button>
       <button className="chip dark" onClick={async () => { if (confirm('Reset all demo data?')) { await reset(); nav('/'); } }}>Reset demo</button>
+      </span>
     </div>
   );
 }

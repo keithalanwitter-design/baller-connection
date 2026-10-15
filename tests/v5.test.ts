@@ -6,7 +6,6 @@ import { scopeSnapshot, type Actor } from '../shared/permissions';
 import { seed } from '../shared/seed';
 import { buildQueue, guide } from '../shared/workflow';
 import { canSeeClip, clipError, CLIP_MAX_BYTES, normalizeMime, sniffMime, videoDuration } from '../shared/clips';
-import { promiseCard } from '../shared/promises';
 import { memoryStore } from '../server/blobs';
 import { handle } from '../server/app';
 import { login, makeEnv } from './helpers';
@@ -44,14 +43,14 @@ describe('clip access control', () => {
     const s = seed(); const c = s.clips.find((x) => x.playerId === 'riley')!; const riley = P(s, 'riley');
     expect(canSeeClip({ id: 'u_riley', role: 'player', playerId: 'riley' }, riley, c)).toBe(true); expect(canSeeClip(CHRIS, riley, c)).toBe(true); expect(canSeeClip(ASST, riley, c)).toBe(true); expect(canSeeClip(HEAD, riley, c)).toBe(true);
     expect(canSeeClip(DANA, riley, c)).toBe(false); expect(canSeeClip(OPS, riley, c)).toBe(false); expect(canSeeClip(AVERY, riley, c)).toBe(false); expect(canSeeClip({ id: 'u_x', role: 'assistant' }, riley, c)).toBe(false);
-    expect(scopeSnapshot(s, OPS).clips).toEqual([]); expect(scopeSnapshot(s, DANA).clips).toEqual([]); expect(scopeSnapshot(s, CHRIS).clips.length).toBe(1);
+    expect(scopeSnapshot(s, OPS).clips).toEqual([]); expect(scopeSnapshot(s, DANA).clips.every((x) => x.playerId === 'avery')).toBe(true); expect(scopeSnapshot(s, CHRIS).clips.map((x) => x.id)).toEqual(['clip_riley']);
   });
   it('a coach on another player cannot delete; the family can, and the 90-day sweep does', () => {
     const s = seed(); expect(() => run(s, { id: 'u_other', role: 'assistant' }, { type: 'deleteClip', playerId: 'avery', clipId: 'clip_riley' })).toThrow();
-    expect(run(s, CHRIS, { type: 'deleteClip', playerId: 'riley', clipId: 'clip_riley' }).clips.length).toBe(0);
-    expect(run(s, SYS, { type: 'advanceClock', hours: 24 * 88 }).clips.length).toBe(1); expect(run(s, SYS, { type: 'advanceClock', hours: 24 * 91 }).clips.length).toBe(0);
+    expect(run(s, CHRIS, { type: 'deleteClip', playerId: 'riley', clipId: 'clip_riley' }).clips.some((x) => x.id === 'clip_riley')).toBe(false);
+    expect(run(s, SYS, { type: 'advanceClock', hours: 24 * 88 }).clips.some((x) => x.id === 'clip_riley')).toBe(true); expect(run(s, SYS, { type: 'advanceClock', hours: 24 * 91 }).clips.length).toBe(0);
   });
-  it('data deletion removes clips', () => { let s = run(seed(), CHRIS, { type: 'requestData', playerId: 'riley', kind: 'delete' }); s = run(s, OPS, { type: 'completeDataRequest', requestId: s.dataRequests.at(-1)!.id }); expect(s.clips.length).toBe(0); });
+  it('data deletion removes clips', () => { let s = run(seed(), CHRIS, { type: 'requestData', playerId: 'riley', kind: 'delete' }); s = run(s, OPS, { type: 'completeDataRequest', requestId: s.dataRequests.at(-1)!.id }); expect(s.clips.some((c) => c.playerId === 'riley')).toBe(false); });
 });
 
 describe('clips over HTTP (Node/Worker share server/app.ts)', () => {
@@ -99,23 +98,23 @@ describe('clip review: timestamps, timing, quota', () => {
 });
 
 describe('understand + confirm', () => {
-  it('“Got it, I’ll do this” logs the commitment and puts the next rep on Today', () => {
-    const s0 = seed(); expect(guide(s0, P(s0, 'nia'), 'player').action?.label).toMatch(/Got it, I’ll do this/);
-    const s = run(s0, NIA, { type: 'reactFeedback', playerId: 'nia', reviewId: 'r_ni2', reaction: 'got_it' });
-    expect(P(s, 'nia').state).toBe('Work ready'); expect(s.reviews.find((r) => r.id === 'r_ni2')!.reaction).toBe('got_it'); expect(s.events.some((e) => e.type === 'feedback' && /Committed/.test(e.detail))).toBe(true);
-    expect(promiseCard(s, P(s, 'nia')).find((x) => x.promise.id === 'focus-confirm')!.status.state).toBe('kept');
+  it('say-it-back: the player’s own words go to the coach and the next rep opens; the coach marks it', () => {
+    const s0 = seed(); expect(guide(s0, P(s0, 'nia'), 'player').action?.label).toMatch(/Say it in my words/);
+    const s = run(s0, NIA, { type: 'teachBack', playerId: 'nia', reviewId: 'r_ni2', change: 'Keep the same tempo on the left side too.', notice: 'My left foot stays planted.' });
+    expect(P(s, 'nia').state).toBe('Work ready'); const r = s.reviews.find((x) => x.id === 'r_ni2')!; expect(r.teachBack?.change).toMatch(/same tempo/); expect(r.teachBack?.mark).toBeNull();
+    expect(s.notifications.some((n) => n.userId === 'u_asst' && n.type === 'teachback')).toBe(true);
+    expect(() => run(s0, NIA, { type: 'teachBack', playerId: 'nia', reviewId: 'r_ni2', change: 'ok' })).toThrow(/your way|sentence/i);
   });
   it('“I have a question” opens a feedback thread and a Reply needed item; no rep unlocks', () => {
     const s = run(seed(), NIA, { type: 'reactFeedback', playerId: 'nia', reviewId: 'r_ni2', reaction: 'question', question: 'Same tempo on the left too?' });
-    expect(P(s, 'nia').state).toBe('Next step ready'); expect(buildQueue(s).some((q) => q.kind === 'Reply needed' && q.player.id === 'nia' && /Question on feedback/.test(q.what))).toBe(true);
+    expect(P(s, 'nia').state).toBe('Next step ready'); expect(buildQueue(s).some((q) => q.kind === 'Reply needed' && q.player.id === 'nia' && /On your feedback/.test(q.what))).toBe(true);
   });
-  it('unconfirmed after 48 h: one gentle nudge to the family and a Not confirmed queue item, cleared by the ack', () => {
-    let s = run(seed(), SYS, { type: 'sweep' }); const r = s.reviews.find((x) => x.id === 'r_av2')!; expect(r.nudgedAt).toBeTruthy();
-    const nudges = s.notifications.filter((n) => n.dedupe.endsWith('nudge:r_av2')); expect(nudges.map((n) => n.userId).sort()).toEqual(['u_avery', 'u_dana']);
-    s = run(s, SYS, { type: 'sweep' }); expect(s.notifications.filter((n) => n.dedupe.endsWith('nudge:r_av2')).length).toBe(2); // once
-    expect(s.reviews.find((x) => x.id === 'r_ni2')!.nudgedAt).toBeFalsy(); // 10 h old: no nudge yet
-    expect(buildQueue(s, 'u_head').some((q) => q.kind === 'Not confirmed' && q.player.id === 'avery')).toBe(true);
-    s = run(s, AVERY, { type: 'reactFeedback', playerId: 'avery', reviewId: 'r_av2', reaction: 'got_it' }); expect(buildQueue(s).some((q) => q.kind === 'Not confirmed' && q.player.id === 'avery')).toBe(false);
+  it('no teach-back after 72 h: one gentle nudge to the player only (never a scold, never the coach)', () => {
+    let s = run(seed(), SYS, { type: 'advanceClock', hours: 24 * 3 }); const r = s.reviews.find((x) => x.id === 'r_av2')!; expect(r.teachBack?.mark).toBeNull();
+    s = run(seed(), NIA, { type: 'startNext', playerId: 'nia' }); s = run(s, SYS, { type: 'advanceClock', hours: 80 });
+    const nudges = s.notifications.filter((n) => n.dedupe.endsWith('nudge:r_ni2')); expect(nudges.map((n) => n.userId)).toEqual(['u_nia']);
+    s = run(s, SYS, { type: 'sweep' }); expect(s.notifications.filter((n) => n.dedupe.endsWith('nudge:r_ni2')).length).toBe(1);
+    expect(buildQueue(s, 'u_asst').some((q) => q.kind === 'Reply needed' && /teach-back/i.test(q.what))).toBe(false);
   });
   it('“What I’m working on”: one sentence in the player’s words, stamped with the week', () => {
     const s = run(seed(), NIA, { type: 'setWorkingOn', playerId: 'nia', text: 'Hesi into pull-up at the same speed both ways.' }); expect(P(s, 'nia').workingOn).toMatch(/Hesi/); expect(P(s, 'nia').workingOnWeek).toBeTruthy();

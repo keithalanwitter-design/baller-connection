@@ -1,12 +1,13 @@
-import { CONSENT_TEXT, CONSENT_VERSION, DEFAULT_PREFS, TIER_INFO, replyLabel, type Command, type Notification, type Subscription, type DomainEvent, type LifecycleState, type MessageContext, type NotificationType, type Player, type Snapshot, type Tier } from './domain';
-import { composeFeedback, plainFeedback, rhythmToday } from './personal';
+import { CONSENT_TEXT, CONSENT_VERSION, DEFAULT_PREFS, PRIVATE_CONTEXTS, TIER_INFO, replyLabel, type Command, type Notification, type Subscription, type DomainEvent, type LifecycleState, type MessageContext, type NotificationType, type Player, type Snapshot, type Tier } from './domain';
+import { composeFeedback, rhythmToday } from './personal';
 import { promiseRisks, reviewsAllowed, reviewedThisWeek } from './promises';
 import { sha256 } from './sha256';
 import { CLIP_RETENTION_DAYS, clipError, clipExpired, fmtT } from './clips';
 import { assertCan, type Actor } from './permissions';
 import { CATEGORY, quietUntil, render, wants, type EmailData, type EmailKind } from './emails';
 import { PRICE_CENTS, graceEnds, isPaid, subscriptionOf } from './billing';
-import { cleanShots, cleanStats, confidenceDip, gameAsksThisWeek, gamePlan, gamesOf, TRIED_LABEL } from './games';
+import { cleanShots, cleanStats, confidenceDip, gamePlan, gamesOf } from './games';
+import { latestSession, parentSentence, WEEKDAYS, weekChoiceNote } from './v9';
 import { addBusinessDays, isoDay, officeDue, shortWhen, weekKey } from './time';
 import { lastReview, canTransition, capacity, clock, first, headCoach, lastSubmission, openAssignment, pendingReview, playerAssignments, playerCycle, progress, replyDue, staff, userName } from './workflow';
 
@@ -18,10 +19,12 @@ export const randomToken = (bytes = 24) => Array.from(crypto.getRandomValues(new
 const code6 = () => String(crypto.getRandomValues(new Uint32Array(1))[0] % 1e6).padStart(6, '0');
 export const isUrl = (u?: string) => !u || /^https?:\/\/[^\s]+$/i.test(u.trim());
 
+/** v9: an application is “parent-only” when the player gave no words of their own, or the parent says it’s mostly their idea. The coach is told; it is never an automatic no. */
+export const parentOnly = (a: Record<string, string>) => a.want === 'Mostly mine (parent)' || (a.playerWords ?? '').trim().length < 10;
 export function suggestTier(a: Record<string, string>): { fit: 'fit' | 'waitlist' | 'notyet'; tier: Tier; why: string } {
   if (a.need === 'In-person team practice' || a.need === 'Full game-film breakdown') return { fit: 'notyet', tier: 'Foundation', why: `We don’t offer ${a.need.toLowerCase()}. Better to say so now than take your money.` };
   if (a.age === 'Under 10' || a.days === '0–1 days') return { fit: 'notyet', tier: 'Foundation', why: 'The loop works when a player can rep alone 2+ days a week, from about age 10.' };
-  if (a.want === 'Mostly mine (parent)') return { fit: 'fit', tier: 'Foundation', why: 'Start light. Foundation lets your player try the loop without a big commitment.' };
+  if (a.want === 'Mostly mine (parent)') return { fit: 'fit', tier: 'Foundation', why: 'Start light, and bring your player into the next step. This works when it’s their goal too. Foundation is the easy way to find out.' };
   const tier: Tier = a.need === 'Weekly live coaching' ? 'Inner Circle' : a.need === 'Plan + regular feedback' || a.days === '5+ days' ? 'Development' : 'Foundation';
   return { fit: 'fit', tier, why: `${a.days} a week and wanting ${a.need?.toLowerCase()} → ${tier} is the right starting plan.` };
 }
@@ -44,6 +47,9 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     return out;
   };
   const famUsers = (p: Player) => s.users.filter((u) => (u.role === 'parent' && u.familyId === p.familyId) || (u.role === 'player' && u.playerId === p.id)).map((u) => u.id);
+  /** v9: per-rep news goes to the player. A parent only gets it if they turned “email me about feedback” on. Digest + timeline are the parent’s default. */
+  const repAud = (p: Player) => s.users.filter((u) => (u.role === 'player' && u.playerId === p.id) || (u.role === 'parent' && u.familyId === p.familyId && u.prefs?.parentCopy === true)).map((u) => u.id);
+  const playerUsers = (p: Player) => s.users.filter((u) => u.role === 'player' && u.playerId === p.id).map((u) => u.id);
   const ops = () => s.users.filter((u) => u.role === 'ops' && u.active).map((u) => u.id); const head = () => headCoach(s)?.id;
   /** v6: templated email (text + HTML). Respects the recipient's preferences (essential mail always goes) and quiet hours (non-essential waits). */
   const sendMail = (kind: EmailKind, to: string | null | undefined, data: EmailData, userId?: string | null) => {
@@ -58,14 +64,15 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
   /** v7 Wins wall entry (deduped by key). */
   const win = (p: Player, kind: 'coach' | 'best' | 'focus' | 'streak' | 'growth', text: string, key: string, refId?: string | null, by?: string | null) => { s.wins = s.wins ?? []; if (s.wins.some((w) => w.playerId === p.id && w.key === key)) return; s.wins.push({ id: id('win'), playerId: p.id, at, kind, text, refId: refId ?? null, by: by ?? null, key }); };
   /** Parent digest: games + confidence, in growth language. */
-  const gameDigest = (p: Player, cut: number) => { const gs = gamesOf(s, p.id).filter((g) => new Date(g.at).getTime() > cut); if (!gs.length) return ''; const c = (gs.reduce((n, g) => n + g.confidence, 0) / gs.length).toFixed(1); const tried = gs.filter((g) => g.focusTried === 'yes').length; const pts = gs.map((g) => g.stats?.pts).filter((x): x is number => x != null); const best = gs.map((g) => g.wellDone).filter(Boolean).at(-1);
-    return ` Games: ${gs.length} this week${pts.length ? ` (${pts.join(', ')} pts)` : ''}; confidence averaged ${c}/5; tried the focus in ${tried} of ${gs.length}.${best ? ` Proud of: “${best}”` : ''}`; };
+  const gameDigest = (p: Player, cut: number) => { const gs = gamesOf(s, p.id).filter((g) => new Date(g.at).getTime() > cut); if (!gs.length) return ''; const g = gs[gs.length - 1]; const mark = g.mark ? ({ carried: 'it carried over', partly: 'it partly carried over', 'not-yet': 'it hasn’t shown up in games yet' })[g.mark] : null;
+    return ` Game note${gs.length > 1 ? ` (${gs.length} games)` : ''}: ${g.carried ? `“${g.carried}”` : 'logged'}${mark ? `; coach’s read: ${mark}` : ''}.`; };
   const levelCheck = (p: Player, before: number) => { const after = progress(s, p.id).level; if (after > before) milestone(p, `Level ${after}`); };
   const applyReview = (p: Player, decision: 'approve' | 'retry', feedback: string, reviewerId: string) => {
     const sub = lastSubmission(s, p.id); const a = s.assignments.find((x) => x.id === sub?.assignmentId)!; const b = progress(s, p.id).level;
     if (decision === 'approve') { a.status = 'approved'; move(p, 'Next step ready', `Approved: ${a.title}`); if (s.reviews.filter((r) => r.playerId === p.id && r.decision === 'approve' && r.status === 'final').length === 1) milestone(p, 'First approval'); }
-    else { a.status = 'retry'; s.assignments.push({ ...a, id: id('as'), order: a.order + 0.5, status: 'open' }); move(p, 'Work ready', `Another attempt: ${a.title}`); milestone(p, 'Honest retry'); }
-    const snippet = feedback.split('\n')[0].replace(/^✓ /, '').slice(0, 60); const ns = notify(famUsers(p), 'feedback_ready', `${userName(s, reviewerId)} on ${a.title}: “${snippet}”`, '/app', p.id);
+    else { a.status = 'retry'; s.assignments.push({ ...a, id: id('as'), order: a.order + 0.5, status: 'open' }); move(p, 'Work ready', `Same rep again: ${a.title}`); milestone(p, 'Honest retry'); }
+    if (a.title.startsWith('Show me again') && p.probe && p.probe.status === 'open') { p.probe = { ...p.probe, status: 'done' }; log('probe', `Show-me-again clip reviewed: ${p.probe.title}`, p.id); }
+    const snippet = feedback.split('\n')[0].replace(/^✓ /, '').slice(0, 60); const ns = notify(repAud(p), 'feedback_ready', `${first(userName(s, reviewerId))} watched your ${a.title}: “${snippet}”`, '/app', p.id);
     markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'feedback-ready', { player: first(p.name), coach: userName(s, reviewerId), rep: a.title, snippet })); levelCheck(p, b);
   };
   const runSweep = () => {
@@ -84,16 +91,19 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     for (const p of s.players.filter((x) => !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding', 'Paused'].includes(x.state))) {
       for (const { promise, risk } of promiseRisks(s, p)) notify([p.coachId], 'promise_risk', `Promise at risk: ${risk.what}.`, `/coach/player/${p.id}`, p.id, `risk:${promise.id}:${p.id}:${wk}`);
       const subs = s.submissions.filter((x) => x.playerId === p.id && weekKey(new Date(x.at)) === wk).length;
-      if (r.key === 'plan-drop') { const ns = notify(famUsers(p), 'rhythm', `Plan drop: this week’s reps are on Today.`, '/app', p.id, `rhythm:plan:${p.id}:${wk}`); markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'plan-drop', { playerFirst: first(p.name), focus: playerCycle(s, p.id)?.focus })); }
-      if (r.key === 'midweek' && subs === 0) { notify(famUsers(p).filter((u) => s.users.find((x) => x.id === u)?.role === 'player'), 'rhythm', `Mid-week check-in: log one rep tonight.`, '/app', p.id, `rhythm:mid:${p.id}:${wk}`); notify([p.coachId], 'rhythm', `${p.name} has no check-in yet this week.`, `/coach/player/${p.id}`, p.id, `rhythm:midc:${p.id}:${wk}`); }
-      if (r.key === 'wrap' && !s.reflections.some((x) => x.playerId === p.id && x.week === wk)) notify(famUsers(p).filter((u) => s.users.find((x) => x.id === u)?.role === 'player'), 'rhythm', `Friday wrap: two lines on your week.`, '/app', p.id, `rhythm:wrap:${p.id}:${wk}`);
+      if (r.key === 'plan-drop') { const ns = notify(repAud(p), 'rhythm', `New week. Your focus is on Today.`, '/app', p.id, `rhythm:plan:${p.id}:${wk}`); markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'plan-drop', { playerFirst: first(p.name), focus: playerCycle(s, p.id)?.focus })); }
+      // v9: the player’s own clip day. A gentle nudge once, never to the coach, never a streak at stake.
+      const cd = p.rhythmPlan?.clipDay; if (cd && cd === WEEKDAYS[clock(s).getDay()] && subs === 0 && !weekChoiceNote(p, clock(s))) notify(playerUsers(p), 'rhythm', `Your clip day. One clip, 30 seconds or less, when you’re ready.`, '/app', p.id, `rhythm:clip:${p.id}:${wk}`);
+      // v9: a rough week is never scolded. Friday, if nothing came in, the player is offered three ways forward.
+      if (r.key === 'wrap' && subs === 0 && !weekChoiceNote(p, clock(s)) && ['Work ready', 'Next step ready'].includes(p.state)) notify(playerUsers(p), 'rhythm', `Rough week? Pick a light week, a reset, or talk to your coach. No catching up needed.`, '/app#rough', p.id, `rhythm:rough:${p.id}:${wk}`);
+      // v9: “show me again”. On the date, the same drill comes up as the next rep.
+      if (p.probe?.status === 'requested' && p.probe.dueOn <= isoDay(clock(s))) { const cyc = playerCycle(s, p.id); if (cyc) { const qs = playerAssignments(s, p.id).filter((x) => x.status === 'queued'); const d = p.probe.drillId ? s.drills.find((x) => x.id === p.probe!.drillId) : undefined; const order = (qs[0]?.order ?? 100 * cyc.index + 99) - 0.25; s.assignments.push({ id: id('as'), cycleId: cyc.id, playerId: p.id, drillId: d?.id ?? null, order, title: `Show me again: ${p.probe.title}`, reps: d?.reps ?? 3, minutes: d?.minutes ?? 10, cues: d?.cues ?? [], pressure: d?.pressure ?? null, status: 'queued' }); p.probe = { ...p.probe, status: 'open' }; log('probe', `Show me again: ${p.probe.title}`, p.id); notify(playerUsers(p), 'rhythm', `Show me again: ${p.probe.title}. Same drill, a fresh clip.`, '/app', p.id, `probe:${p.id}:${p.probe.dueOn}`); } }
       if (p.tournamentDate) { const day = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: s.settings.timezone ?? 'America/Chicago' }).format(d); if (day(new Date(p.tournamentDate)) === day(clock(s))) { const g = gamePlan(s, p); notify(famUsers(p).filter((u) => s.users.find((x) => x.id === u)?.role === 'player'), 'gameday', `Game day card: ${g.focus ? `focus on ${g.focus}` : 'one focus'}${g.cue ? `, cue “${g.cue}”` : ''}. ${g.affirmation ?? 'You’ve done the reps.'}`, '/app', p.id, `gameday:${p.id}:${day(clock(s))}`); } }
     }
     for (const r of s.reviews.filter((x) => x.status === 'final' && !x.reaction && !x.nudgedAt)) {
-      const p = s.players.find((x) => x.id === r.playerId); const since = new Date(r.signedOffAt ?? r.at).getTime(); if (!p || p.state === 'Paused' || n - since < 48 * 36e5) continue;
-      r.nudgedAt = clock(s).toISOString(); log('feedback', 'Gentle nudge: feedback not confirmed after 48 h', p.id);
-      const ns = notify(famUsers(p), 'rhythm', `Quick check: does ${first(userName(s, r.reviewerId))}’s note make sense? Tap “Got it” or ask a question.`, '/app', p.id, `nudge:${r.id}`);
-      markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'focus-nudge', { player: first(p.name), coachFirst: first(userName(s, r.reviewerId)) }));
+      const p = s.players.find((x) => x.id === r.playerId); const since = new Date(r.signedOffAt ?? r.at).getTime(); if (!p || p.state === 'Paused' || n - since < 72 * 36e5) continue;
+      r.nudgedAt = clock(s).toISOString(); log('feedback', 'Gentle nudge: no teach-back after 72 h', p.id);
+      notify(repAud(p), 'rhythm', `When you’re ready: what will you do differently after ${first(userName(s, r.reviewerId))}’s note? A sentence is plenty.`, '/app', p.id, `nudge:${r.id}`);
     }
     const expired = s.clips.filter((c) => clipExpired(c, clock(s))); if (expired.length) { s.clips = s.clips.filter((c) => !expired.includes(c)); for (const c of expired) log('clip', `Clip removed after ${CLIP_RETENTION_DAYS} days`, c.playerId); }
     for (const inv of s.invites.filter((i) => i.status === 'pending' && new Date(i.expiresAt).getTime() < n)) {
@@ -141,8 +151,9 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
   const startNext = (p: Player) => {
       const cy = playerCycle(s, p.id); const ended = !!cy && new Date(cy.endAt) < t; const q = ended ? undefined : playerAssignments(s, p.id).find((a) => a.status === 'queued');
       if (q) { q.status = 'open'; move(p, 'Work ready', `Unlocked: ${q.title}`); }
-      else { const c = playerCycle(s, p.id); const b = progress(s, p.id).level; if (c) c.status = 'review'; move(p, 'Cycle review', `Cycle ${c?.index} complete`); milestone(p, `Cycle ${c?.index} complete`); levelCheck(p, b); notify([p.coachId], 'cycle_review', `${p.name} finished cycle ${c?.index}. Do the cycle review.`, `/coach/cycle/${p.id}`, p.id); notify(famUsers(p), 'cycle_review', `Cycle ${c?.index} done! Tell your coach what improved.`, '/app/develop#cycle', p.id); }
+      else { const c = playerCycle(s, p.id); const b = progress(s, p.id).level; if (c) c.status = 'review'; move(p, 'Cycle review', `Cycle ${c?.index} complete`); milestone(p, `Cycle ${c?.index} complete`); levelCheck(p, b); notify([p.coachId], 'cycle_review', `${p.name} finished cycle ${c?.index}. Do the cycle review.`, `/coach/cycle/${p.id}`, p.id); notify(playerUsers(p), 'cycle_review', `Time for your re-check. Tell your coach what changed since week 1.`, '/app/develop#cycle', p.id); }
   };
+  const validRhythm = (n: number, day: string) => { if (!Number.isInteger(n) || n < 1 || n > 7) throw new WorkflowError('Pick 1 to 7 clips a week. Fewer is fine in season.'); if (!(WEEKDAYS as readonly string[]).includes(day)) throw new WorkflowError('Pick a clip day.'); return { repsPerWeek: n, clipDay: day }; };
   const userNameOfPlayer = (pid: string) => s.players.find((p) => p.id === pid)?.name ?? 'player';
 
   switch (cmd.type) {
@@ -152,6 +163,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       s.families.push(fam); s.players.push(p); s.applications.push({ id: id('app'), at, playerId: p.id, answers: cmd.answers, tier: r.tier, fit: r.fit, next: cmd.next });
       log('application', `${p.name} applied (${r.fit}, suggested ${r.tier}, wants ${cmd.next})`, p.id, undefined, 'Applied');
       notify(ops(), 'new_application', `New application: ${p.name} (${r.tier}${cmd.next === 'call' ? ', wants a call' : ''}).`, `/ops/player/${p.id}`, p.id);
+      if (parentOnly(cmd.answers)) { notify([head(), ...ops()], 'new_application', `Fit check: ${p.name}’s application doesn’t have the player’s own reason yet. Ask them on the fit call. Not a no.`, `/ops/player/${p.id}`, p.id, `parentonly:${p.id}`); log('application', 'Flagged: the player’s own words are missing or the parent says it is mostly theirs', p.id); }
       if (fam.email) sendMail('application', fam.email, { parent: fam.parentName, player: p.name });
       created.playerId = p.id; break;
     }
@@ -188,10 +200,12 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const p = P(cmd.playerId); guard(p); if (!cmd.goal.trim() || !cmd.rhythm.trim()) throw new WorkflowError('Goal and weekly rhythm are required.');
       if (s.settings.requirePayment !== false && !isPaid(p)) throw new WorkflowError('Choose the plan and pay first (secure Stripe checkout; cancel anytime).');
       if (!s.consents.some((c) => c.playerId === p.id)) throw new WorkflowError('Parental consent is required before coaching starts.');
-      Object.assign(p, { position: cmd.position, goal: cmd.goal.trim(), learnStyle: cmd.learnStyle, rhythm: cmd.rhythm, frustration: (cmd.frustration ?? '').trim(), proudOf: (cmd.proudOf ?? '').trim(), rubric: { 'Ball security': 1, Finishing: 1, Defense: 1, 'Shot form': 1, Confidence: 1 } });
+      if (!cmd.agreed) throw new WorkflowError('Tick the roles agreement first. It’s short, and it keeps the coaching with the coach.');
+      const rp = cmd.repsPerWeek ? validRhythm(cmd.repsPerWeek, cmd.clipDay ?? '') : null;
+      Object.assign(p, { position: cmd.position, goal: cmd.goal.trim(), learnStyle: cmd.learnStyle, rhythm: cmd.rhythm, frustration: (cmd.frustration ?? '').trim(), proudOf: (cmd.proudOf ?? '').trim(), rubric: { 'Ball security': 1, Finishing: 1, Defense: 1, 'Shot form': 1, Confidence: 1 }, agreement: { at, by: actor.id }, rhythmPlan: rp, aboutMe: p.aboutMe || (cmd.playerWords ?? '').trim().slice(0, 600) });
+      if (rp) p.rhythm = `${rp.repsPerWeek} clip${rp.repsPerWeek === 1 ? '' : 's'} a week, clip day ${rp.clipDay}`;
       const b = progress(s, p.id).level; move(p, 'Plan building', 'Onboarding complete: coach owes first plan'); levelCheck(p, b);
-      s.messages.push({ id: id('msg'), playerId: p.id, from: 'coach', authorId: p.coachId, context: 'general', text: `Welcome, ${first(p.name)}! I read your goal: “${p.goal}”${p.proudOf ? ` and that you’re proud of ${p.proudOf.replace(/[.!]$/, '')}` : ''}. Your first plan lands by ${addBusinessDays(t, 2).toLocaleDateString('en-US', { weekday: 'long' })}.`, at, answered: true, readBy: {} });
-      notify([p.coachId], 'invite_accepted', `${p.name} finished onboarding. Plan due in 2 business days.`, `/coach/plan/${p.id}`, p.id); break;
+      notify([p.coachId], 'invite_accepted', `${p.name} finished setup. First look is due in 2 business days.`, `/coach/plan/${p.id}`, p.id); break;
     }
     case 'setPlayerLogin': {
       const p = P(cmd.playerId); const uname = cmd.username.trim().toLowerCase(); if (!/^[a-z0-9.\-_]{3,30}$/.test(uname)) throw new WorkflowError('Username: 3–30 letters, numbers, dots or dashes.');
@@ -209,12 +223,14 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
     case 'publishPlan': {
       const p = P(cmd.playerId); guard(p); checkRev(p, cmd.rev); if (!cmd.focus.trim()) throw new WorkflowError('A plan needs one focus.');
       if (p.state === 'Cycle review' && !s.cycleReviews.some((r) => r.cycleId === playerCycle(s, p.id)?.id && r.coachAt)) throw new WorkflowError('Finish the cycle review (new ratings + next focus) before the next plan.'); if (!cmd.drillIds.length) throw new WorkflowError('Assign at least one rep.');
+      const sawText = (cmd.saw ?? '').trim(); const isFirst = !playerCycle(s, p.id); if (isFirst && sawText.length < 10) throw new WorkflowError('Write the first look: what you saw in the clip or session, in a sentence or two. That’s what sets the first focus.');
       const prev = playerCycle(s, p.id); if (prev) prev.status = 'closed';
       const cyc = { id: id('cyc'), playerId: p.id, index: (prev?.index ?? 0) + 1, focus: cmd.focus.trim(), startAt: at, endAt: new Date(t.getTime() + (s.settings.cycleWeeks ?? 4) * 7 * 864e5).toISOString(), status: 'active' as const, templateId: cmd.templateId ?? null, adjustedAt: null };
       s.cycles.push(cyc);
       cmd.drillIds.forEach((did, i) => { const d = s.drills.find((x) => x.id === did); if (!d) throw new WorkflowError('Unknown drill'); s.assignments.push({ id: id('as'), cycleId: cyc.id, playerId: p.id, drillId: d.id, order: 100 * cyc.index + i, title: d.title, reps: d.reps, minutes: d.minutes, cues: d.cues, pressure: d.pressure ?? null, status: 'queued' }); });
+      if (sawText) { const src = cmd.source ?? (latestSession(s, p.id, 30) ? 'session' : 'clip'); if (isFirst) p.firstLook = { saw: sawText.slice(0, 600), source: src, at, by: actor.id }; addMessage(p, 'coach', 'general', `${isFirst ? 'First look' : 'What I saw'}: ${sawText}`, null); }
       move(p, 'Plan set', `Cycle ${cyc.index}: “${cyc.focus}” with ${cmd.drillIds.length} rep(s)`);
-      notify(famUsers(p), 'plan_published', `New plan: ${cyc.focus}. Open Today to unlock rep 1.`, '/app', p.id); break;
+      notify(repAud(p), 'plan_published', `Your first look is in, and your focus is set: ${cyc.focus}.`, '/app', p.id); break;
     }
     case 'openPlan': { const p = P(cmd.playerId); guard(p); const q = playerAssignments(s, p.id).find((a) => a.status === 'queued'); if (!q) throw new WorkflowError('No reps in this plan.'); q.status = 'open'; move(p, 'Work ready', `Unlocked: ${q.title}`); break; }
     case 'submitRep': {
@@ -231,7 +247,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
         notify([p.coachId], 'new_submission', `${p.name} submitted ${a.title}${clip ? ' with a clip' : ''}. Reply by ${shortWhen(dueBy)}.`, `/coach/review/${p.id}`, p.id);
       } else {
         a.status = 'logged'; move(p, 'Next step ready', `${a.title}: logged (this week’s ${allowed} review${allowed === 1 ? '' : 's'} used)`);
-        notify(famUsers(p), 'feedback_ready', `Logged ${a.title}. You’ve used this week’s ${allowed} review${allowed === 1 ? '' : 's'} on ${p.tier}; your coach still sees it. Next rep is unlocked.`, '/app', p.id);
+        notify(playerUsers(p), 'feedback_ready', `Saved ${a.title}. Your coach still sees every clip, but this week’s ${allowed} written ${allowed === 1 ? 'review is' : 'reviews are'} used on ${p.tier}. The next rep is open.`, '/app', p.id);
       }
       milestone(p, 'First check-in'); levelCheck(p, b); break;
     }
@@ -243,7 +259,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const notes = (cmd.notes ?? []).map((n) => ({ t: Math.max(0, Math.round(Number(n.t) * 10) / 10), text: String(n.text ?? '').trim().slice(0, 140) })).filter((n) => n.text && Number.isFinite(n.t)).sort((x, y) => x.t - y.t).slice(0, 12);
       if (notes.length && !sub.clipId) throw new WorkflowError('Timestamp notes need a clip.');
       const a = s.assignments.find((x) => x.id === sub.assignmentId); const nq = playerAssignments(s, p.id).find((x) => x.status === 'queued');
-      const nextRep = cmd.decision === 'retry' ? `${a?.title} again, with the adjustment` : nq ? nq.title : 'Cycle wrap-up and review';
+      const nextRep = cmd.decision === 'retry' ? `${a?.title} again, with the one adjustment` : nq ? nq.title : 'Cycle wrap-up and review';
       const needsSignoff = actor.role === 'assistant' && s.settings.requireSignoff;
       s.reviews.push({ id: id('rev'), submissionId: sub.id, playerId: p.id, decision: cmd.decision, ...f, nextRep, linkUrl: cmd.linkUrl?.trim() || null, feedback: composeFeedback(p, { ...f, nextRep }) + (notes.length ? `\n${notes.map((n) => `${fmtT(n.t)} ${n.text}`).join('\n')}` : ''), notes, secondsSpent: cmd.secondsSpent && cmd.secondsSpent > 0 ? Math.round(Math.min(cmd.secondsSpent, 3600)) : null, reaction: null, at, reviewerId: actor.id, status: needsSignoff ? 'pending_signoff' : 'final' });
       if (needsSignoff) { move(p, 'Sign-off', `${userName(s, actor.id)} reviewed (${cmd.decision}); awaiting head-coach sign-off`); notify([head()], 'signoff_needed', `Sign-off needed: ${userName(s, actor.id)} reviewed ${p.name}.`, `/coach/review/${p.id}`, p.id); }
@@ -253,7 +269,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const p = P(cmd.playerId); guard(p); checkRev(p, cmd.rev); const r = pendingReview(s, p.id); if (!r) throw new WorkflowError('No review waiting for sign-off.');
       const edited = !!cmd.edit && Object.values(cmd.edit).some((v) => v?.trim());
       r.signedOffBy = actor.id; r.signedOffAt = at; r.status = 'final'; if (edited) { for (const k of ['wentWell', 'adjust', 'why'] as const) if (cmd.edit?.[k]?.trim()) r[k] = cmd.edit[k]!.trim(); } if (!cmd.approve) r.decision = r.decision === 'approve' ? 'retry' : 'approve';
-      if (!cmd.approve) { const a = s.assignments.find((x) => x.id === s.submissions.find((y) => y.id === r.submissionId)?.assignmentId); const nq = playerAssignments(s, p.id).find((x) => x.status === 'queued'); r.nextRep = r.decision === 'retry' ? `${a?.title} again, with the adjustment` : nq ? nq.title : 'Cycle wrap-up and review'; }
+      if (!cmd.approve) { const a = s.assignments.find((x) => x.id === s.submissions.find((y) => y.id === r.submissionId)?.assignmentId); const nq = playerAssignments(s, p.id).find((x) => x.status === 'queued'); r.nextRep = r.decision === 'retry' ? `${a?.title} again, with the one adjustment` : nq ? nq.title : 'Cycle wrap-up and review'; }
       r.feedback = composeFeedback(p, r) + (r.notes?.length ? `\n${r.notes.map((n) => `${fmtT(n.t)} ${n.text}`).join('\n')}` : '');
       log('signoff', `Head coach signed off ${userName(s, r.reviewerId)}’s review${cmd.approve ? '' : ' (decision changed)'}${edited ? ' with edits' : ''}`, p.id);
       applyReview(p, r.decision, r.feedback, r.reviewerId); notify([r.reviewerId], 'feedback_ready', `Your review of ${p.name} was signed off.`, `/coach/player/${p.id}`, p.id); break;
@@ -265,12 +281,13 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const p = P(cmd.playerId); if (!cmd.text.trim()) throw new WorkflowError('Empty message.'); if (!isUrl(cmd.linkUrl)) throw new WorkflowError('Links must start with http:// or https://');
       const from = actor.role === 'parent' ? 'parent' : actor.role === 'player' ? 'player' : 'coach'; const context: MessageContext = cmd.context ?? 'general';
       const inThread = (c: MessageContext) => s.messages.some((m) => m.playerId === p.id && m.context === c && (m.refId ?? null) === (cmd.refId ?? null));
+      if (PRIVATE_CONTEXTS.includes(context) && from === 'parent') throw new WorkflowError('That thread is between the player and the coach.');
       if (context === 'urgent' && from === 'player') throw new WorkflowError('Urgent is for parents (schedule changes, injuries, emergencies).');
       if (context === 'urgent' && from === 'coach' && !inThread('urgent')) throw new WorkflowError('Urgent is for parents (schedule changes, injuries, emergencies).');
       if (context === 'gameplan' && from !== 'coach' && !inThread('gameplan')) throw new WorkflowError('Game plans come from the coach.');
       const msg = addMessage(p, from, context, cmd.text.trim(), cmd.refId ?? null, cmd.linkUrl);
       log('message', `${from} → ${from === 'coach' ? 'family' : 'coach'} [${context}]: “${cmd.text.trim().slice(0, 50)}”`, p.id);
-      const ns = notify(from === 'coach' ? famUsers(p) : context === 'urgent' ? [p.coachId, head()] : [p.coachId], context === 'urgent' && from !== 'coach' ? 'overdue' : 'new_message', `${context === 'urgent' && from !== 'coach' ? 'URGENT · ' : ''}${userName(s, actor.id)}: “${cmd.text.trim().slice(0, 60)}”`, from === 'coach' ? `/inbox?t=${msg.thread}` : `/coach/player/${p.id}?tab=messages`, p.id);
+      const ns = notify(from === 'coach' ? (PRIVATE_CONTEXTS.includes(context) || ['feedback', 'rep', 'gameplan'].includes(context) ? playerUsers(p) : famUsers(p)) : context === 'urgent' ? [p.coachId, head()] : [p.coachId], context === 'urgent' && from !== 'coach' ? 'overdue' : 'new_message', `${context === 'urgent' && from !== 'coach' ? 'URGENT · ' : ''}${userName(s, actor.id)}: “${cmd.text.trim().slice(0, 60)}”`, from === 'coach' ? `/inbox?t=${msg.thread}` : `/coach/player/${p.id}?tab=messages`, p.id);
       if (from !== 'coach') markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'reply-needed', { player: p.name, from: userName(s, actor.id), due: msg.dueBy ? shortWhen(msg.dueBy) : 'soon', snippet: cmd.text.trim().slice(0, 140), playerId: p.id })); break;
     }
     case 'markRead': { s.messages.forEach((m) => { if (m.playerId === cmd.playerId && m.authorId !== actor.id && !m.readBy[actor.id]) m.readBy = { ...m.readBy, [actor.id]: at }; }); break; }
@@ -303,12 +320,12 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const p = P(cmd.playerId); if (p.state !== 'Cycle review') throw new WorkflowError('No cycle to review.'); const c = playerCycle(s, p.id)!; if (!cmd.summary.trim() || !cmd.nextFocus.trim()) throw new WorkflowError('Write a summary and pick the next focus.');
       const cr = cycleReviewFor(p, c.id); const before = { ...p.rubric }; const after = { ...p.rubric }; for (const [k, v] of Object.entries(cmd.ratings)) after[k] = Math.max(1, Math.min(5, Math.round(v)));
       Object.assign(cr, { summary: cmd.summary.trim(), nextFocus: cmd.nextFocus.trim(), ratingsBefore: before, ratingsAfter: after, coachAt: at }); p.rubric = after; p.rev = (p.rev ?? 0) + 1; for (const [k, v] of Object.entries(after)) if (v > (before[k] ?? 0)) win(p, 'growth', `${k}: ${before[k] ?? '–'} → ${v} (cycle ${c.index} review)`, `growth:${c.id}:${k}`, c.id, actor.id);
-      log('cycle', `Cycle ${c.index} reviewed · next focus “${cmd.nextFocus.trim()}”`, p.id); notify(famUsers(p), 'cycle_review', `Cycle ${c.index} review is in: next focus “${cmd.nextFocus.trim()}”.`, '/app/develop#cycle', p.id); break;
+      log('cycle', `Cycle ${c.index} reviewed · next focus “${cmd.nextFocus.trim()}”`, p.id); notify(repAud(p), 'cycle_review', `Your re-check is in. Next focus: “${cmd.nextFocus.trim()}”.`, '/app/develop#cycle', p.id); break;
     }
     case 'adjustPlan': {
       const p = P(cmd.playerId); const c = playerCycle(s, p.id); if (!c || c.status !== 'active') throw new WorkflowError('No active plan to adjust.'); if (cmd.note.trim().length < 3) throw new WorkflowError('Say what changed and why.');
       (cmd.addDrillIds ?? []).forEach((did, i) => { const d = s.drills.find((x) => x.id === did); if (!d) throw new WorkflowError('Unknown drill'); s.assignments.push({ id: id('as'), cycleId: c.id, playerId: p.id, drillId: d.id, order: 100 * c.index + 50 + i + Math.random(), title: d.title, reps: d.reps, minutes: d.minutes, cues: d.cues, pressure: d.pressure ?? null, status: 'queued' }); if (d.pressure) { s.timelineNotes = s.timelineNotes ?? []; if (!s.timelineNotes.some((n) => n.playerId === p.id && n.kind === 'cue' && n.refId === c.id)) s.timelineNotes.push({ id: id('tn'), playerId: p.id, kind: 'cue', refId: c.id, date: isoDay(t), text: `Pressure rep added: ${d.title}`, status: 'approved', by: actor.id, at }); } });
-      c.adjustedAt = at; addMessage(p, 'coach', 'rep', `Plan adjusted: ${cmd.note.trim()}`, c.id); log('plan', `Plan adjusted: ${cmd.note.trim().slice(0, 60)}`, p.id); notify(famUsers(p), 'plan_published', `Plan adjusted: ${cmd.note.trim().slice(0, 60)}`, '/app', p.id); break;
+      c.adjustedAt = at; addMessage(p, 'coach', 'rep', `Plan adjusted: ${cmd.note.trim()}`, c.id); log('plan', `Plan adjusted: ${cmd.note.trim().slice(0, 60)}`, p.id); notify(repAud(p), 'plan_published', `Your coach changed the plan: ${cmd.note.trim().slice(0, 60)}`, '/app', p.id); break;
     }
     case 'approveDigests': { for (const it of cmd.items) { const r = dispatch(s, { type: 'approveDigest', playerId: it.playerId, text: it.text }, actor); Object.assign(s, r.snapshot); } break; }
     case 'registerClip': {
@@ -349,7 +366,7 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       if (Number.isNaN(new Date(cmd.at).getTime())) throw new WorkflowError('Pick a date and time.');
       const staffId = cmd.staffId ?? (cmd.playerId ? (['head', 'assistant'].includes(actor.role) ? actor.id : P(cmd.playerId).coachId) : actor.id);
       s.meetings.push({ id: id('mt'), playerId: cmd.playerId ?? null, staffId, at: new Date(cmd.at).toISOString(), minutes: cmd.minutes, kind: cmd.kind, note: cmd.note, status: 'scheduled' });
-      if (cmd.playerId) { const p = P(cmd.playerId); p.nextSession = isoDay(new Date(cmd.at)); notify(famUsers(p), 'plan_published', `${cmd.kind === 'live' ? 'Live session' : 'Check-in'} scheduled ${shortWhen(cmd.at)}.`, '/app', p.id); }
+      if (cmd.playerId) { const p = P(cmd.playerId); p.nextSession = isoDay(new Date(cmd.at)); notify(repAud(p), 'plan_published', `${cmd.kind === 'live' ? 'Live session' : 'Check-in'} booked for ${shortWhen(cmd.at)}.`, '/app', p.id); }
       log('schedule', `${cmd.kind} scheduled ${shortWhen(cmd.at)}`, cmd.playerId); break;
     }
     case 'cancelSession': { const m = s.meetings.find((x) => x.id === cmd.meetingId); if (m) { m.status = 'cancelled'; log('schedule', `${m.kind} on ${shortWhen(m.at)} cancelled`, m.playerId); } break; }
@@ -379,34 +396,27 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       } else log('privacy', 'Export delivered', r.playerId); break;
     }
     case 'logGame': {
-      const p = P(cmd.playerId); if (['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(p.state)) throw new WorkflowError('Game logs start once coaching starts.');
-      for (const [k, v] of [['Confidence', cmd.confidence], ['Focus', cmd.focus], ['Energy', cmd.energy]] as const) if (!Number.isInteger(v) || v < 1 || v > 5) throw new WorkflowError(`${k}: pick 1 to 5.`);
-      const well = (cmd.wellDone ?? '').trim(); if (well.length < 3) throw new WorkflowError('Add one thing you did well. Small counts.');
+      const p = P(cmd.playerId); if (['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(p.state)) throw new WorkflowError('Game notes start once coaching starts.');
+      const feel = cmd.confidence ?? 3; for (const [k, v] of [['How it felt', feel], ['Focus', cmd.focus ?? 3], ['Energy', cmd.energy ?? 3]] as const) if (!Number.isInteger(v) || v < 1 || v > 5) throw new WorkflowError(`${k}: pick 1 to 5.`);
+      const carried = (cmd.carried ?? cmd.wellDone ?? '').trim(); if (carried.length < 3) throw new WorkflowError('One line on what carried over from practice. “Nothing yet” is an honest answer.');
+      const missed = (cmd.missed ?? '').trim();
       let stats; try { stats = cleanStats(cmd.stats); } catch (e) { throw new WorkflowError((e as Error).message); }
       const date = cmd.date && /^\d{4}-\d{2}-\d{2}$/.test(cmd.date) ? cmd.date : isoDay(t); if (date > isoDay(new Date(t.getTime() + 864e5))) throw new WorkflowError('That game hasn’t happened yet.');
-      const c = playerCycle(s, p.id); if (c && c.status === 'active' && !cmd.focusTried) throw new WorkflowError('Did you try your focus in the game? Yes, sometimes or not yet are all fine answers.');
-      if (cmd.wantsReply && gameAsksThisWeek(s, p.id, t) >= 1) throw new WorkflowError('You already asked about a game this week. Your coach still sees this one; ask again next week.');
-      const prev = gamesOf(s, p.id); const g = { id: id('gm'), playerId: p.id, date, at, opponent: cmd.opponent?.trim().slice(0, 60) || null, stats, confidence: cmd.confidence, focus: cmd.focus, energy: cmd.energy, wellDone: well.slice(0, 160), replay: (cmd.replay ?? '').trim().slice(0, 160), focusTried: c ? cmd.focusTried ?? null : null, cycleId: c?.id ?? null, focusText: c?.focus ?? null, wantsReply: !!cmd.wantsReply, dueBy: cmd.wantsReply ? replyDue(s, p, t).toISOString() : null, seenAt: null, seenBy: null, reply: null };
-      s.games = [...(s.games ?? []), g]; log('game', `Game logged${g.opponent ? ` vs ${g.opponent}` : ''} · confidence ${g.confidence}/5${g.focusTried ? ` · focus: ${TRIED_LABEL[g.focusTried]}` : ''}${g.wantsReply ? ' · asked for feedback' : ''}`, p.id);
-      const ptsPrev = prev.map((x) => x.stats?.pts).filter((x): x is number => x != null);
-      if (stats.pts != null && ptsPrev.length >= 2 && stats.pts > Math.max(...ptsPrev)) win(p, 'best', `Personal best: ${stats.pts} points${g.opponent ? ` vs ${g.opponent}` : ''}`, `best:pts:${stats.pts}`, g.id);
-      if (g.focusTried === 'yes' && c) win(p, 'focus', `Took the focus into a game: ${c.focus}`, `focus:${c.id}`, g.id);
-      milestone(p, 'First game logged');
-      notify([p.coachId], 'game', `${p.name} logged a game${g.opponent ? ` vs ${g.opponent}` : ''}: confidence ${g.confidence}/5${g.wantsReply ? `. Asked for feedback by ${shortWhen(g.dueBy!)}` : ''}.`, `/coach/player/${p.id}?tab=games`, p.id);
-      const dip = confidenceDip(s, p.id); if (dip?.last.id === g.id) { notify([p.coachId], 'confidence', `Gentle check-in: ${first(p.name)}’s game confidence dipped two games in a row (${dip.values.join(' → ')}).`, `/coach/player/${p.id}?tab=games`, p.id, `conf:${g.id}`); log('confidence', `Confidence dipped 2 games in a row (${dip.values.join(' → ')}); coach flagged`, p.id); }
+      const c = playerCycle(s, p.id);
+      const g = { id: id('gm'), playerId: p.id, date, at, opponent: cmd.opponent?.trim().slice(0, 60) || null, stats, confidence: feel, focus: cmd.focus ?? 3, energy: cmd.energy ?? 3, wellDone: carried.slice(0, 160), replay: (cmd.replay ?? '').trim().slice(0, 160), focusTried: cmd.focusTried ?? null, cycleId: c?.id ?? null, focusText: c?.focus ?? null, wantsReply: false, dueBy: null, seenAt: null, seenBy: null, reply: null, carried: carried.slice(0, 200), missed: missed.slice(0, 200) || null, mark: null, markNote: null, markedAt: null };
+      s.games = [...(s.games ?? []), g]; log('game', `Game note${g.opponent ? ` vs ${g.opponent}` : ''}: “${carried.slice(0, 50)}”`, p.id);
+      milestone(p, 'First game note');
+      notify([p.coachId], 'game', `${p.name} wrote a game note${g.opponent ? ` vs ${g.opponent}` : ''}: “${carried.slice(0, 60)}”.`, `/coach/player/${p.id}?tab=games`, p.id);
+      const dip = confidenceDip(s, p.id); if (dip?.last.id === g.id) { notify([p.coachId], 'confidence', `Check in on ${first(p.name)}: games have felt rougher two in a row (${dip.values.join(' → ')}).`, `/coach/player/${p.id}?tab=games`, p.id, `conf:${g.id}`); log('confidence', `Games felt rougher two in a row (${dip.values.join(' → ')}); coach flagged`, p.id); }
       break;
     }
-    case 'reviewGame': {
+    case 'markGame': {
       const p = P(cmd.playerId); const g = (s.games ?? []).find((x) => x.id === cmd.gameId && x.playerId === p.id); if (!g) throw new WorkflowError('Game not found.');
-      const f = { wentWell: (cmd.wentWell ?? '').trim(), adjust: (cmd.adjust ?? '').trim(), why: (cmd.why ?? '').trim() }; const any = f.wentWell || f.adjust || f.why;
-      g.seenAt = g.seenAt ?? at; g.seenBy = g.seenBy ?? actor.id;
-      if (!any) { if (g.wantsReply && !g.reply) throw new WorkflowError(`${first(p.name)} asked for feedback on this game. Write the reply (what went well, one adjustment, why).`); log('game', 'Coach saw the game log', p.id); break; }
-      if (f.wentWell.length < 3 || f.adjust.length < 3 || f.why.length < 3) throw new WorkflowError('Game feedback uses the same format: what went well, one adjustment, why.');
-      const nq = openAssignment(s, p.id) ?? playerAssignments(s, p.id).find((x) => x.status === 'queued');
-      g.reply = { ...f, feedback: composeFeedback(p, { ...f, nextRep: nq ? `${nq.title}, with this in mind` : 'Keep the focus in your next game' }), by: actor.id, at };
-      log('game', `Coach replied to the game log${g.opponent ? ` vs ${g.opponent}` : ''}`, p.id);
-      const ns = notify(famUsers(p), 'feedback_ready', `${userName(s, actor.id)} on your game: “${f.wentWell.slice(0, 60)}”`, '/app/games', p.id);
-      markEmailed(ns, emailUsers(ns.map((x) => x.userId), 'feedback-ready', { player: first(p.name), coach: userName(s, actor.id), rep: `your game${g.opponent ? ` vs ${g.opponent}` : ''}`, snippet: f.wentWell.slice(0, 60) })); break;
+      if (!['carried', 'partly', 'not-yet'].includes(cmd.mark)) throw new WorkflowError('Pick carried over, partly or not yet.');
+      g.mark = cmd.mark; g.markNote = (cmd.note ?? '').trim().slice(0, 200) || null; g.markedAt = at; g.seenAt = g.seenAt ?? at; g.seenBy = g.seenBy ?? actor.id;
+      if (cmd.mark === 'carried' && g.focusText) win(p, 'focus', `Carried into a game: ${g.focusText}`, `focus:${g.cycleId ?? g.id}`, g.id, actor.id);
+      log('game', `Coach read the game note${g.opponent ? ` vs ${g.opponent}` : ''}: ${cmd.mark}`, p.id);
+      notify(repAud(p), 'feedback_ready', `${first(userName(s, actor.id))} read your game note: ${({ carried: 'it carried over', partly: 'partly carried over', 'not-yet': 'not yet, and that’s normal' })[cmd.mark]}.${g.markNote ? ` “${g.markNote.slice(0, 60)}”` : ''}`, '/app/games', p.id); break;
     }
     case 'addNote': {
       const p = P(cmd.playerId); const text = cmd.text.trim().slice(0, cmd.kind === 'story' ? 900 : 140); if (cmd.kind !== 'cue' && text.length < 3) throw new WorkflowError('Write one line.');
@@ -418,9 +428,9 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const status: 'draft' | 'approved' = cmd.kind === 'story' && !cmd.approve ? 'draft' : 'approved';
       if (ex) Object.assign(ex, { text, status, by: actor.id, at, date, drafted: !!cmd.drafted }); else s.timelineNotes.push({ id: id('tn'), playerId: p.id, kind: cmd.kind, refId, date, text, status, by: actor.id, at, drafted: !!cmd.drafted });
       log('timeline', cmd.kind === 'story' ? `“What changed and why” ${status === 'approved' ? 'approved' : 'saved as draft'}` : cmd.kind === 'cue' ? 'Game-transfer cue handled' : `Timeline note: ${text}`, p.id);
-      if (cmd.kind === 'story' && status === 'approved') notify(famUsers(p), 'cycle_review', `${userName(s, actor.id)} wrote what changed and why.`, '/app/progress#timeline', p.id); break;
+      if (cmd.kind === 'story' && status === 'approved') notify(repAud(p), 'cycle_review', `${userName(s, actor.id)} wrote up what changed and why.`, '/app/progress#timeline', p.id); break;
     }
-    case 'tagWin': { const p = P(cmd.playerId); const text = cmd.text.trim().slice(0, 140); if (text.length < 3) throw new WorkflowError('Describe the moment in one line.'); win(p, 'coach', text, `coach:${id('k')}`, cmd.refId ?? null, actor.id); notify(famUsers(p), 'feedback_ready', `${userName(s, actor.id)} added to your Wins wall: “${text.slice(0, 60)}”`, '/app/progress#wins', p.id); log('win', `Coach tagged a win: ${text}`, p.id); break; }
+    case 'tagWin': { const p = P(cmd.playerId); const text = cmd.text.trim().slice(0, 140); if (text.length < 3) throw new WorkflowError('Describe the moment in one line.'); win(p, 'coach', text, `coach:${id('k')}`, cmd.refId ?? null, actor.id); notify(repAud(p), 'feedback_ready', `${userName(s, actor.id)} noticed: “${text.slice(0, 60)}”`, '/app/progress#wins', p.id); log('win', `Coach tagged a win: ${text}`, p.id); break; }
     case 'setAffirmation': { const p = P(cmd.playerId); p.affirmation = cmd.text.trim().slice(0, 120) || null; log('gameplan', 'Game plan affirmation updated', p.id); break; }
     case 'setCard': {
       const p = P(cmd.playerId); const c = { enabled: false, showStats: false, token: null as string | null, momentId: null as string | null, ...(p.card ?? {}) };
@@ -428,6 +438,49 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       if (c.enabled && (!c.token || cmd.newLink)) c.token = randomToken(16); if (!c.enabled) c.token = cmd.newLink ? null : c.token;
       p.card = { ...c, updatedAt: at }; log('privacy', `Player Card link ${c.enabled ? 'on' : 'off'}${c.enabled && cmd.newLink ? ' (new link; old one stops working)' : ''} · stats ${c.showStats ? 'shown' : 'hidden'}`, p.id); break;
     }
+    case 'teachBack': {
+      const p = P(cmd.playerId); const r = s.reviews.find((x) => x.id === cmd.reviewId && x.playerId === p.id && x.status === 'final'); if (!r) throw new WorkflowError('Feedback not found.');
+      const change = cmd.change.trim(); if (change.length < 8) throw new WorkflowError('Say it your way: what will you do differently? A sentence is plenty.');
+      if (r.teachBack?.mark === 'got-it') throw new WorkflowError('Your coach already read this one.');
+      r.teachBack = { change: change.slice(0, 300), notice: (cmd.notice ?? '').trim().slice(0, 300), at, mark: null, markedAt: null, markedBy: null, note: null }; r.reaction = 'got_it'; r.reactedAt = at;
+      log('feedback', `Teach-back: “${change.slice(0, 60)}”`, p.id); notify([p.coachId], 'teachback', `${first(p.name)}, in their words: “${change.slice(0, 70)}”`, `/coach/player/${p.id}?tab=feedback`, p.id);
+      const latest = lastReview(s, p.id); if (latest?.id === r.id && p.state === 'Next step ready') startNext(p); break;
+    }
+    case 'markTeachBack': {
+      const p = P(cmd.playerId); const r = s.reviews.find((x) => x.id === cmd.reviewId && x.playerId === p.id && x.teachBack); if (!r?.teachBack) throw new WorkflowError('No teach-back to read yet.');
+      const note = (cmd.note ?? '').trim(); if (cmd.mark === 'clarify' && note.length < 3) throw new WorkflowError('Say what to clarify, in a line. It opens a short thread with the player.');
+      r.teachBack = { ...r.teachBack, mark: cmd.mark, markedAt: at, markedBy: actor.id, note: note || null }; log('feedback', `Teach-back: ${cmd.mark === 'got-it' ? 'got it' : 'let’s clarify'}`, p.id);
+      if (cmd.mark === 'clarify') addMessage(p, 'coach', 'feedback', note, r.id); else notify(playerUsers(p), 'teachback', `${first(userName(s, actor.id))} read your teach-back: got it.${note ? ` “${note.slice(0, 60)}”` : ''}`, '/app', p.id); break;
+    }
+    case 'logSession': {
+      const p = P(cmd.playerId); if (['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(p.state)) throw new WorkflowError('Session notes start once coaching starts.');
+      const note = cmd.note.trim(); const focus = cmd.focus.trim(); if (note.length < 5) throw new WorkflowError('Write what you saw in the session. A line or two.'); if (focus.length < 3) throw new WorkflowError('Name the focus for the next stretch.');
+      const date = cmd.date && /^\d{4}-\d{2}-\d{2}$/.test(cmd.date) ? cmd.date : isoDay(t); if (date > isoDay(t)) throw new WorkflowError('That session hasn’t happened yet.');
+      s.sessions = s.sessions ?? []; s.sessions.push({ id: id('ses'), playerId: p.id, coachId: actor.id, date, note: note.slice(0, 600), focus: focus.slice(0, 120), cue: (cmd.cue ?? '').trim().slice(0, 140) || null, at });
+      const c = playerCycle(s, p.id); if (c && c.status === 'active') { c.focus = focus.slice(0, 120); p.rev = (p.rev ?? 0) + 1; }
+      log('session', `Session note (${date}): next focus “${focus.slice(0, 60)}”`, p.id); notify(repAud(p), 'session', `From your session: ${focus}. ${first(userName(s, actor.id))} left you a note.`, '/app', p.id); break;
+    }
+    case 'setRhythm': { const p = P(cmd.playerId); p.rhythmPlan = validRhythm(cmd.repsPerWeek, cmd.clipDay); p.rhythm = `${p.rhythmPlan.repsPerWeek} clip${p.rhythmPlan.repsPerWeek === 1 ? '' : 's'} a week, clip day ${p.rhythmPlan.clipDay}`; log('profile', `Rhythm: ${p.rhythm}`, p.id); break; }
+    case 'roughWeek': {
+      const p = P(cmd.playerId); if (!['light', 'reset', 'talk'].includes(cmd.choice)) throw new WorkflowError('Pick a light week, a reset, or talk to your coach.');
+      p.weekChoice = { week: weekKey(t), choice: cmd.choice, at }; const label = { light: 'a light week', reset: 'a reset', talk: 'to talk' }[cmd.choice]; const note = (cmd.note ?? '').trim();
+      const from = actor.role === 'parent' ? 'parent' : 'player'; addMessage(p, from, 'checkin', `Rough week. I’d like ${label}.${note ? ` ${note}` : ''}`, null);
+      log('profile', `Rough week: ${cmd.choice}`, p.id); notify([p.coachId], 'stuck', `Check in: ${first(p.name)} picked ${label}. No reps owed this week.`, `/coach/player/${p.id}?tab=messages`, p.id); break;
+    }
+    case 'sendStuck': {
+      const p = P(cmd.playerId); const parts = [['What happened', cmd.happened], ['What would help', cmd.want], ['How I’m feeling', cmd.feeling]].map(([k, v]) => [k, (v ?? '').trim()] as [string, string]).filter(([, v]) => v.length >= 2);
+      if (!parts.length) throw new WorkflowError('Answer any one question. A few words is enough.');
+      const text = parts.map(([k, v]) => `${k}: ${v}`).join('\n').slice(0, 900); addMessage(p, 'player', 'stuck', text, null);
+      log('message', `${first(p.name)} sent “I’m stuck” to the coach (private)`, p.id); notify([p.coachId], 'stuck', `Check in: ${first(p.name)} hit “I’m stuck”. Reply by ${shortWhen(replyDue(s, p, t).toISOString())}.`, `/coach/player/${p.id}?tab=messages&t=stuck%3A`, p.id); break;
+    }
+    case 'sendCheckIn': { const p = P(cmd.playerId); const text = cmd.text.trim(); if (text.length < 5) throw new WorkflowError('Write the check-in in your own words.'); addMessage(p, 'coach', 'checkin', text, null); log('message', 'Coach check-in (private)', p.id); notify(playerUsers(p), 'new_message', `${first(userName(s, actor.id))}: “${text.slice(0, 60)}”`, '/inbox', p.id); break; }
+    case 'setGamify': { const p = P(cmd.playerId); p.gamify = !!cmd.on; log('profile', `Streaks and points ${cmd.on ? 'on' : 'off'}`, p.id); break; }
+    case 'requestProbe': {
+      const p = P(cmd.playerId); const c = playerCycle(s, p.id); if (!c || c.status !== 'active') throw new WorkflowError('Show me again works on an active plan.'); const title = cmd.title.trim(); if (title.length < 3) throw new WorkflowError('Which drill do you want to see again?');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(cmd.dueOn) || cmd.dueOn < isoDay(t)) throw new WorkflowError('Pick a date from today on.');
+      p.probe = { title, drillId: cmd.drillId ?? null, dueOn: cmd.dueOn, by: actor.id, note: (cmd.note ?? '').trim().slice(0, 140), status: 'requested', requestedAt: at }; log('probe', `Show me again: ${title} on ${cmd.dueOn}`, p.id); break;
+    }
+    case 'setParentNote': { const p = P(cmd.playerId); const text = cmd.text.trim(); if (text.length < 8) throw new WorkflowError('One plain sentence for the parent.'); p.parentNote = { week: weekKey(t), text: text.slice(0, 220), by: actor.id, at }; log('profile', 'Parent note for the week', p.id); break; }
     case 'sweep': { runSweep(); break; }
     case 'billingEvent': {
       s.subscriptions = s.subscriptions ?? []; s.billingEvents = s.billingEvents ?? [];
@@ -483,8 +536,9 @@ export function dispatch(input: Snapshot, cmd: Command, actor: Actor): Result {
       const wk = weekKey(t); const cut = t.getTime() - 7 * 864e5; let n = 0;
       for (const p of s.players.filter((x) => !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(x.state))) {
         if (s.digests.some((d) => d.playerId === p.id && d.week === wk)) continue;
-        const done = s.submissions.filter((x) => x.playerId === p.id && new Date(x.at).getTime() > cut).length; const r = s.reviews.filter((x) => x.playerId === p.id && x.status === 'final').sort((a, b) => b.at.localeCompare(a.at))[0]; const pr = progress(s, p.id);
-        s.digests.push({ id: id('dg'), playerId: p.id, week: wk, status: 'draft', text: `${first(p.name)} logged ${done} check-in${done === 1 ? '' : 's'} this week, is on a ${pr.streak}-day habit streak, and is at Level ${pr.level} (${pr.name}). Focus: ${playerCycle(s, p.id)?.focus ?? 'first plan coming'}.${r && r.wentWell ? ` ${plainFeedback(p, r)}` : ''}${(() => { const rf = s.reflections.find((x) => x.playerId === p.id && x.week === wk); return rf ? ` In ${first(p.name)}’s words: “${rf.text}”` : ''; })()}${gameDigest(p, cut)}` }); n++;
+        const done = s.submissions.filter((x) => x.playerId === p.id && new Date(x.at).getTime() > cut).length;  const pr = progress(s, p.id);
+        const sent = s.clips.filter((c) => c.playerId === p.id && new Date(c.at).getTime() > cut).length; const ps = parentSentence(s, p); const rf = s.reflections.find((x) => x.playerId === p.id && x.week === wk); const g9 = p.gamify ? ` Streak: ${pr.streak} days.` : '';
+        s.digests.push({ id: id('dg'), playerId: p.id, week: wk, status: 'draft', text: `${first(p.name)} sent ${done} check-in${done === 1 ? '' : 's'}${sent ? ` (${sent} with a clip)` : ''} this week. ${ps.text}${rf ? ` In ${first(p.name)}’s words: “${rf.text}”` : ''}${gameDigest(p, cut)}${g9}` }); n++;
         notify([p.coachId], 'digest_ready', `Weekly digest draft ready for ${p.name}.`, '/coach/digest', p.id, `digest:${p.id}:${wk}`);
       }
       log('digest', `Generated ${n} digest draft(s)`); break;

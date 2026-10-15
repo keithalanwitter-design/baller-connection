@@ -2,14 +2,14 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Logo } from '../App';
 import { useSnap, useStore } from '../store';
 import { weekKey } from '../../shared/time';
-import { clock, family, first, playerCycle, progress } from '../../shared/workflow';
+import { clock, family, first, playerCycle } from '../../shared/workflow';
 import { Moments, PathPanel, PlayerPicker, Track, UserMenu, useFamilyPlayer } from '../ui';
 import { ClipPrivacy, FocusCard } from '../v5';
 import { BillingPanel } from '../v6';
-import { CardSettings, GamesList, Timeline, WinsWall } from '../v7';
+import { CardSettings, WinsWall } from '../v7';
+import { GameNotes, ParentWeek, SinceWeek1 } from '../v9';
 import { subscriptionOf } from '../../shared/billing';
 import { CoachKnows, CycleReviewPlayer, PromiseCard, UnifiedInbox } from '../v4';
-import { plainFeedback } from '../../shared/personal';
 import { useEffect, useState } from 'react';
 import { shortWhen } from '../../shared/time';
 import { userName } from '../../shared/workflow';
@@ -41,11 +41,22 @@ function Account({ p }: { p: Player }) {
   </>;
 }
 
+/** What you and your player agreed to, and what stays private. */
+function Roles({ p }: { p: Player }) {
+  const s = useSnap(); const { run, as } = useStore(); const u = s.users.find((x) => x.id === as?.id); const fn = first(p.name); const coach = first(userName(s, p.coachId));
+  return <section className="panel" id="roles"><h3 className="display">How we work together</h3>
+    <ul className="plain small"><li><b>{fn}’s job:</b> send a clip, write what happened, and say the adjustment back in their own words.</li><li><b>Your job:</b> ask about the rep, not the result. Let {fn} own the clip day.</li><li><b>{coach}’s job:</b> watch every clip, write back by the reply window, and set the next focus.</li></ul>
+    {p.agreement ? <p className="small dim">Agreed {shortWhen(p.agreement.at)}.</p> : <p className="small dim">Not yet agreed.</p>}
+    <p className="small"><b>What stays private:</b> if {fn} presses “I’m stuck,” that note goes to {coach} only. He may talk with you if something needs a grown-up, and he’ll tell {fn} first.</p>
+    <label className="check small"><input id="parentcopy" type="checkbox" checked={u?.prefs?.parentCopy === true} onChange={(e) => run({ type: 'setEmailPrefs', prefs: { parentCopy: e.target.checked } })} /> Also notify me when {coach} writes back to {fn} (off by default)</label>
+    <p className="small dim">You get the Sunday note and account email either way. More in <Link to="/account">Email settings</Link>.</p></section>;
+}
+
 export default function Parent() {
   const s = useSnap(); const [sp] = useSearchParams(); const p = useFamilyPlayer(s, sp.get('p')); const { run, mode } = useStore();
   if (!p) return <main className="appmain"><p>No player on this account yet. <Link to="/invite">Accept an invite</Link></p></main>;
-  const wk = clock(s).getTime() - 7 * 864e5; const pr = progress(s, p.id); const cyc = playerCycle(s, p.id);
-  const subs = s.submissions.filter((x) => x.playerId === p.id && new Date(x.at).getTime() > wk);
+  const cyc = playerCycle(s, p.id);
+  
   const assigned = s.assignments.filter((a) => a.playerId === p.id && a.cycleId === cyc?.id);
   const digest = s.digests.filter((d) => d.playerId === p.id && d.status === 'approved').sort((a, b) => b.week.localeCompare(a.week))[0]; void weekKey;
   const canPause = !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding', 'Paused'].includes(p.state);
@@ -58,22 +69,23 @@ export default function Parent() {
         <Track state={p.state} />
         <PathPanel p={p} role="parent" compact />
         <FocusCard p={p} me="parent" compact />
-        <div className="stats"><div><b>{assigned.length}</b><span>reps this cycle</span></div><div><b>{subs.length}</b><span>done this week</span></div><div><b>{pr.streak}</b><span>day streak</span></div><div><b>L{pr.level}</b><span>{pr.name}</span></div></div>
-        <section className="panel"><h3 className="display">Coach’s weekly note</h3>{digest ? <blockquote className="quote sm">{digest.text}</blockquote> : <p className="dim">The coach approves this week’s summary on Sunday.</p>}</section>
-        <Timeline p={p} me="parent" />
-        <section className="panel" id="games"><h3 className="display">Games</h3><p className="small dim">{first(p.name)} logs games after they happen; the coach reads every one. Confidence is {first(p.name)}’s own read, shown to help, never graded.</p><GamesList p={p} me="parent" /></section>
+        <ParentWeek p={p} />
+        <section className="panel"><h3 className="display">Coach’s weekly note</h3>{digest ? <blockquote className="quote sm">{digest.text}</blockquote> : <p className="dim">One short note each Sunday: what {first(p.name)} sent and what comes next.</p>}<p className="small dim">That, plus this page, is all you get by default. No alert for every rep.</p></section>
+        <SinceWeek1 p={p} me="parent" />
+        <section className="panel" id="games"><h3 className="display">Game notes</h3><p className="small dim">{first(p.name)} writes a short note after a game and the coach reads it. This is {first(p.name)}’s own read, never graded.</p><GameNotes p={p} me="parent" /></section>
         <WinsWall p={p} me="parent" />
-        <section className="panel"><h3 className="display">This cycle{cyc ? `: ${cyc.focus}` : ''}</h3>{assigned.length === 0 ? <p className="dim">No work assigned yet.</p> :
-          <ul className="plain">{assigned.map((a) => { const r = s.reviews.find((x) => x.status === 'final' && s.submissions.find((y) => y.id === x.submissionId)?.assignmentId === a.id); return <li key={a.id}><strong>{a.title}</strong> — {({ queued: 'up later', open: 'to do now', submitted: 'done, awaiting coach', approved: 'approved ✓', retry: 'coach asked for another attempt', logged: 'done (logged)' })[a.status]}{r && <p className="small dim">{r.wentWell ? plainFeedback(p, r) : `Coach: ${r.feedback}`}</p>}</li>; })}</ul>}</section>
+        <section className="panel"><h3 className="display">This cycle{cyc ? `: ${cyc.focus}` : ''}</h3>{assigned.length === 0 ? <p className="dim">The first focus comes after the coach’s first look.</p> :
+          <ul className="plain">{assigned.map((a) => { const r = s.reviews.find((x) => x.status === 'final' && s.submissions.find((y) => y.id === x.submissionId)?.assignmentId === a.id); return <li key={a.id}><strong>{a.title}</strong> — {({ queued: 'up later', open: 'next', submitted: 'sent, coach reading', approved: 'done ✓', retry: 'same rep again', logged: 'done' })[a.status]}{r && <p className="small dim">{r.wentWell ? `${first(userName(s, r.reviewerId))}: ${r.wentWell} Working on: ${r.adjust}` : `Coach: ${r.feedback}`}</p>}</li>; })}</ul>}</section>
         <PromiseCard p={p} />
         <section className="panel" id="messages"><h3 className="display">Messages & updates</h3><p className="small dim">Pick a type: General, Schedule change, or Urgent (injury or a same-day change: {s.settings.urgentReplyHours} office hours, head coach alerted).</p><UnifiedInbox players={[p]} me="parent" fixedPlayer /></section>
         <CycleReviewPlayer p={p} me="parent" />
         <CoachKnows p={p} />
         <ClipPrivacy p={p} />
+        <Roles p={p} />
         <CardSettings p={p} />
         <BillingPanel p={p} />
         <Account p={p} />
-        <p className="small dim">No coaching homework for you. {canPause && <button className="link small" onClick={() => run({ type: 'pause', playerId: p.id })}>Pause coaching</button>}{p.state === 'Paused' && !subscriptionOf(s, p.id)?.pausedByBilling && <button className="link small" onClick={() => run({ type: 'resume', playerId: p.id })}>Resume coaching</button>} Pausing coaching doesn’t stop billing; to stop paying, cancel in Billing.</p>
+        <p className="small dim">You don’t have a coaching job beyond asking about the rep. {canPause && <button className="link small" onClick={() => run({ type: 'pause', playerId: p.id })}>Pause coaching</button>}{p.state === 'Paused' && !subscriptionOf(s, p.id)?.pausedByBilling && <button className="link small" onClick={() => run({ type: 'resume', playerId: p.id })}>Resume coaching</button>} Pausing coaching doesn’t stop billing; to stop paying, cancel in Billing.</p>
       </main>
       <Moments role="parent" pid={p.id} />
     </div>

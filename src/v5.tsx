@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useSnap, useStore } from './store';
 import type { Clip, Player, Review, TimedNote } from '../shared/domain';
 import { CLIP_ACCEPT, CLIP_MAX_MB, CLIP_MAX_SEC, CLIP_RETENTION_DAYS, TRIM_HINT, clipError, fmtT, mb, normalizeMime, tooLong } from '../shared/clips';
-import { relative, shortWhen, weekKey } from '../shared/time';
-import { clock, first, lastReview, openAssignment, playerAssignments, userName } from '../shared/workflow';
+import { shortWhen, weekKey } from '../shared/time';
+import { clock } from '../shared/workflow';
+import { first, lastReview, openAssignment, playerAssignments, userName } from '../shared/workflow';
+import { TeachBack } from './v9';
 
 /** Reads duration from the file's own metadata in a <video> element (client-side check; the server re-checks the container). */
 export function readDuration(file: Blob): Promise<number | null> {
@@ -23,7 +25,7 @@ export const videoConsentOk = (s: ReturnType<typeof useSnap>, p: Player) => p.ag
 /** Choose or record one clip. Validates type, size and length before anything is uploaded. */
 export function ClipPicker({ p, value, onChange }: { p: Player; value: PickedClip | null; onChange: (c: PickedClip | null) => void }) {
   const s = useSnap(); const [err, setErr] = useState<string | null>(null); const [hint, setHint] = useState(false); const [busy, setBusy] = useState(false);
-  if (!videoConsentOk(s, p)) return <p className="note small" data-clip="consent">Clips are off until a parent OKs them (players under 13). Parent view → Account → “Allow clips”.</p>;
+  if (!videoConsentOk(s, p)) return <p className="note small" data-clip="consent">Clips are off until a parent says OK (players under 13). Parent view → Account → “Allow clips”.</p>;
   const pick = async (f?: File | null) => {
     setErr(null); setHint(false); if (!f) return; setBusy(true);
     const mime = normalizeMime(f.type, f.name); const d = await readDuration(f); setBusy(false);
@@ -31,11 +33,11 @@ export function ClipPicker({ p, value, onChange }: { p: Player; value: PickedCli
     onChange({ file: f, durationSec: d!, mime, url: URL.createObjectURL(f) });
   };
   return <div className="clippick" aria-live="polite">
-    {value ? <div className="clipchosen"><video src={value.url} muted playsInline controls className="clipprev" aria-label="Your clip preview" /><div><b>Clip ready · {Math.round(value.durationSec)} s · {mb(value.file.size)} MB</b><p className="small dim">It uploads when you submit.</p><button type="button" className="link" onClick={() => onChange(null)}>Remove clip</button></div></div>
+    {value ? <div className="clipchosen"><video src={value.url} muted playsInline controls className="clipprev" aria-label="Your clip preview" /><div><b>Clip ready · {Math.round(value.durationSec)} s · {mb(value.file.size)} MB</b><p className="small dim">It uploads when you send.</p><button type="button" className="link" onClick={() => onChange(null)}>Remove clip</button></div></div>
       : <div className="row gap wrapx">
         <label className="btn ghost sm filebtn">🎥 Add a clip<input id="clipfile" type="file" accept={CLIP_ACCEPT} className="sr" onChange={(e) => pick(e.target.files?.[0])} /></label>
         <label className="btn ghost sm filebtn mobileonly">● Record now<input id="cliprec" type="file" accept="video/*" capture="environment" className="sr" onChange={(e) => pick(e.target.files?.[0])} /></label>
-        <span className="small dim">Optional · up to {CLIP_MAX_SEC} s · {CLIP_MAX_MB} MB · MP4, MOV or WebM</span></div>}
+        <span className="small dim">Up to {CLIP_MAX_SEC} s · {CLIP_MAX_MB} MB · MP4, MOV or WebM</span></div>}
     {busy && <p className="small dim">Checking the clip…</p>}
     {err && <p className="err small" role="alert" data-clip="error">{err}</p>}
     {hint && <p className="note small" data-clip="trim">✂ {TRIM_HINT}</p>}
@@ -74,37 +76,25 @@ export function SubmissionClip({ clipId, notes }: { clipId?: string | null; note
   return <ClipPlayer clip={c} notes={notes ?? []} />;
 }
 
-/** When the next rep is due: the earlier of Friday wrap-up and the next session. */
-function byWhen(s: ReturnType<typeof useSnap>, p: Player) {
-  const now = clock(s); const fri = new Date(now); fri.setDate(now.getDate() + ((5 - now.getDay() + 7) % 7 || 7)); fri.setHours(18, 0, 0, 0);
-  const sess = p.nextSession ? new Date(p.nextSession + 'T17:00') : null; const d = sess && sess > now && sess < fri ? sess : fri;
-  return d.toLocaleDateString('en-US', { weekday: 'long' });
-}
-/** "Your focus this week": the one adjustment, the next rep, how many and by when, plus the required acknowledgment. */
+/** “From your coach”: the one adjustment, the next rep, and (for the player) the teach-back in their own words. */
 export function FocusCard({ p, me, compact }: { p: Player; me: 'player' | 'parent'; compact?: boolean }) {
   const s = useSnap(); const { run } = useStore(); const r = lastReview(s, p.id); const [ask, setAsk] = useState(false); const [q, setQ] = useState('');
   if (!r) return null;
   const nextA = openAssignment(s, p.id) ?? playerAssignments(s, p.id).find((x) => x.status === 'queued'); const coach = first(userName(s, r.reviewerId));
   const thread = s.messages.filter((m) => m.context === 'feedback' && m.refId === r.id); const answered = thread.some((m) => m.from === 'coach');
-  return <section className={`focus5 ${compact ? 'compact' : ''} ${r.reaction ? 'acked' : 'pending'}`} id="focus" data-review={r.id} data-ack={r.reaction ?? 'none'}>
-    <p className="kicker orange">Your focus this week · from {coach}</p>
+  return <section className={`focus5 ${compact ? 'compact' : ''} ${r.teachBack ? 'acked' : 'pending'}`} id="focus" data-review={r.id} data-ack={r.teachBack ? (r.teachBack.mark ?? 'sent') : 'none'}>
+    <p className="kicker orange">One thing to work on · from {coach}</p>
     <h2 className="display">{r.adjust}</h2>
     {!compact && <p className="small"><b>What you did well:</b> {r.wentWell}<br /><b>Why this adjustment:</b> {r.why}</p>}
-    <dl className="focusgrid"><div><dt>Next rep</dt><dd>{r.nextRep}</dd></div><div><dt>How much · when</dt><dd>{nextA ? `${nextA.reps} sets` : 'Wrap-up'} · by {byWhen(s, p)}</dd></div></dl>
+    <dl className="focusgrid"><div><dt>Next rep</dt><dd>{r.nextRep}</dd></div><div><dt>How much</dt><dd>{nextA ? `${nextA.reps} sets` : 'Wrap-up'}</dd></div></dl>
     {r.notes && r.notes.length > 0 && !compact && <><p className="kicker">On your clip</p><NoteList notes={r.notes} /></>}
-    {r.reaction === 'got_it' ? <p className="ack ok" role="status">✓ {me === 'player' ? 'You' : first(p.name)} committed {relative(r.reactedAt!, clock(s)) === 'now' ? 'just now' : relative(r.reactedAt!, clock(s))}. {p.state === 'Work ready' ? 'It’s on Today.' : ''}</p>
-      : r.reaction === 'question' ? <p className="ack q" role="status">❓ Question sent{answered ? `. ${coach} answered in Inbox.` : thread.at(-1)?.dueBy ? `. ${coach} replies by ${shortWhen(thread.at(-1)!.dueBy!)}.` : '.'}</p>
-      : me === 'parent' ? <p className="ack wait" role="status">Waiting for {first(p.name)} to confirm (“Got it” or a question).</p>
-      : <><p className="small strong">Does this make sense? Confirm before the next rep.</p>
-        <div className="row gap wrapx"><button id="ack-yes" className="btn lg" onClick={() => run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'got_it' })}>Got it, I’ll do this</button>
-          <button id="ack-q" className="btn lg outline" aria-expanded={ask} onClick={() => setAsk(!ask)}>I have a question</button></div>
-        {ask && <form className="row gap" onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'question', question: q })) { setAsk(false); setQ(''); } }}>
-          <label className="sr" htmlFor="ackq">Your question</label><input id="ackq" autoFocus className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="What part is unclear?" /><button className="btn" disabled={q.trim().length < 3}>Send question</button></form>}
-        <p className="small dim">“Got it” logs your commitment and puts the next rep on Today. A question goes to {coach}, who replies in your Inbox.</p></>}
+    {r.reaction === 'question' && !r.teachBack && <p className="ack q" role="status">❓ Question sent{answered ? `. ${coach} answered in Inbox.` : thread.at(-1)?.dueBy ? `. ${coach} writes back by ${shortWhen(thread.at(-1)!.dueBy!)}.` : '.'}</p>}
+    <TeachBack p={p} r={r} me={me} />
+    {me === 'player' && !r.teachBack && <><button id="ack-q" className="link small" aria-expanded={ask} onClick={() => setAsk(!ask)}>I have a question first</button>
+      {ask && <form className="row gap" onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'question', question: q })) { setAsk(false); setQ(''); } }}>
+        <label className="sr" htmlFor="ackq">Your question</label><input id="ackq" autoFocus className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="What part is unclear?" /><button className="btn" disabled={q.trim().length < 3}>Send question</button></form>}</>}
   </section>;
 }
-export const needsAck = (s: ReturnType<typeof useSnap>, p: Player) => { const r = lastReview(s, p.id); return !!r && !r.reaction; };
-
 /** One sentence in the player's words, renewed each week, at the top of Today. */
 export function WorkingOn({ p, editable }: { p: Player; editable: boolean }) {
   const s = useSnap(); const { run } = useStore(); const fresh = p.workingOn && p.workingOnWeek === weekKey(clock(s)); const [edit, setEdit] = useState(false); const r = lastReview(s, p.id);
@@ -118,13 +108,11 @@ export function WorkingOn({ p, editable }: { p: Player; editable: boolean }) {
   </section>;
 }
 
-/** Coach view: did the family confirm this feedback? */
+/** Coach view: has the player said it back, and have you read it? */
 export function AckStatus({ r }: { r: Review }) {
-  const s = useSnap(); const since = r.signedOffAt ?? r.at; const h = (clock(s).getTime() - new Date(since).getTime()) / 36e5;
   if (r.status !== 'final') return <span className="ackchip wait">Awaiting sign-off</span>;
-  if (r.reaction === 'got_it') return <span className="ackchip ok" title={r.reactedAt ?? ''}>✓ Committed {r.reactedAt ? shortWhen(r.reactedAt) : ''}</span>;
-  if (r.reaction === 'question') return <span className="ackchip q">❓ Asked a question</span>;
-  return <span className={`ackchip ${h >= 48 ? 'late' : 'wait'}`}>{h >= 48 ? `Not confirmed · ${Math.floor(h)} h${r.nudgedAt ? ' · nudged' : ''}` : `Waiting to confirm · ${Math.floor(h)} h`}</span>;
+  const tb = r.teachBack; if (!tb) return <span className="ackchip wait">No teach-back (optional)</span>;
+  return tb.mark === 'got-it' ? <span className="ackchip ok">✓ Teach-back: got it</span> : tb.mark === 'clarify' ? <span className="ackchip q">↺ Clarifying</span> : <span className="ackchip late">Teach-back to read</span>;
 }
 export const fmtSpent = (sec?: number | null) => (sec ? fmtT(sec) : '—');
 

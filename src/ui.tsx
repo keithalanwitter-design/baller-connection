@@ -103,20 +103,20 @@ export function Moments({ role, pid }: { role: Perspective; pid?: string }) {
   if (!last || !last.events.some((e) => e.type === 'transition' || e.type === 'milestone')) return null;
   const setOpen = (_: null) => dismiss();
   const tr = last.events.filter((e) => e.type === 'transition' && (!pid || e.playerId === pid)).at(-1);
-  const ms = last.events.filter((e) => e.type === 'milestone');
-  const p = s.players.find((x) => x.id === (tr?.playerId ?? ms[0]?.playerId)); if (!p) return null;
-  const g = guide(s, p, role); const lvl = ms.find((m) => m.detail.startsWith('Level'));
-  const headline = lvl ? `Level up! ${LEVELS[Number(lvl.detail.split(' ')[1]) - 1]?.name}` : tr?.to === 'Submitted' ? 'Rep submitted!' : tr?.to === 'Next step ready' ? 'Approved!' : ms[0] ? ms[0].detail + '!' : `${first(p.name)}: ${tr?.to}`;
-  const big = !!lvl || ['Submitted', 'Next step ready', 'Cycle review'].includes(tr?.to ?? '') || ms.length > 0;
+  const p = s.players.find((x) => x.id === (tr?.playerId ?? last.events.find((e) => e.type === 'milestone')?.playerId)); if (!p) return null;
+  const ms = p.gamify ? last.events.filter((e) => e.type === 'milestone' && !e.detail.startsWith('Level')) : [];
+  if (!tr && ms.length === 0) return null;
+  const g = guide(s, p, role);
+  const headline = tr?.to === 'Submitted' ? (role === 'coach' ? `${first(p.name)} sent a clip` : 'Sent to your coach') : tr?.to === 'Next step ready' ? (role === 'coach' ? 'Feedback sent' : 'Your coach wrote back') : tr?.to === 'Cycle review' ? 'Time to look back' : ms[0] ? ms[0].detail : `${first(p.name)}: ${tr?.to}`;
+  const big = false;
   return (
     <div className="moment" role="dialog" aria-modal="true" aria-labelledby="mh">
       <div className={`sheet pop ${big ? 'celebrate' : ''}`}>
-        {big && <Confetti />}
         {tr && <p className="kicker">{tr.from} → {tr.to}</p>}
         <h2 id="mh" className="display">{headline}</h2>
         {ms.length > 0 && <ul className="msl">{ms.map((m) => <li key={m.id}>★ {m.detail}</li>)}</ul>}
-        <div className="whatsnext"><span className="kicker">What’s next</span><p className="strong">{g.what}</p><p className="small">{g.whoLabel} acts next{g.byWhen ? ` · by ${g.byWhen}` : ''}. Unlocks: {g.unlocks}</p></div>
-        <div className="row gap">{g.action && g.action.cmd && !['head', 'assistant', 'ops'].includes(g.who) && role !== 'coach' && role !== 'ops' ? <ActionButton g={g} /> : null}<button className="btn ghost" autoFocus onClick={() => setOpen(null)}>Got it</button></div>
+        <div className="whatsnext"><span className="kicker">What’s next</span><p className="strong">{g.what}</p><p className="small">{g.whoLabel} is up next{g.byWhen ? ` · by ${g.byWhen}` : ''}.</p></div>
+        <div className="row gap">{g.action && g.action.cmd && !['head', 'assistant', 'ops'].includes(g.who) && role !== 'coach' && role !== 'ops' ? <ActionButton g={g} /> : null}<button className="btn ghost" autoFocus onClick={() => setOpen(null)}>OK</button></div>
       </div>
     </div>
   );

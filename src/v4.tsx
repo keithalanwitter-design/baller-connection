@@ -7,10 +7,11 @@ import { inOffice, nextOpen, relative, shortWhen, weekKey } from '../shared/time
 import { buildQueue, clock, family, first, playerCycle, tierReply, userName, OWED } from '../shared/workflow';
 import { useSnap, useStore } from './store';
 import { AckStatus, NoteList, SubmissionClip, fmtSpent } from './v5';
+import { TeachBack, TeachBackMark } from './v9';
 
 /* ---------- shared words ---------- */
 export const STATUS_WORD = { kept: 'Kept', 'on-track': 'On track', 'at-risk': 'Being handled', missed: 'Late' } as const;
-export const CTX_LABEL: Record<MessageContext, string> = { general: 'General', rep: 'About a rep', feedback: 'Feedback question', schedule: 'Schedule change', urgent: 'Urgent', gameplan: 'Game plan' };
+export const CTX_LABEL: Record<MessageContext, string> = { general: 'General', rep: 'About a rep', feedback: 'About your feedback', schedule: 'Schedule change', urgent: 'Urgent', gameplan: 'Game plan', stuck: 'I’m stuck (private)', checkin: 'Check-in (private)' };
 export const threadKey = (m: Pick<Message, 'context' | 'refId'>) => `${m.context ?? 'general'}:${m.refId ?? ''}`;
 const reviewTitle = (s: Snapshot, r?: Review) => s.assignments.find((a) => a.id === s.submissions.find((x) => x.id === r?.submissionId)?.assignmentId)?.title;
 export function threadTitle(s: Snapshot, m: Pick<Message, 'context' | 'refId'>) {
@@ -25,7 +26,7 @@ const threadLink = (_s: Snapshot, m: Pick<Message, 'context' | 'refId'>, family:
 export function PromiseCard({ p, title = 'What you can count on' }: { p: Player; title?: string }) {
   const s = useSnap(); const rows = promiseCard(s, p);
   if (!rows.length) return null;
-  return <section className="panel promises" aria-label={title} id="promises"><h3 className="display">{title}</h3><p className="small dim">{p.tier} plan. Live status, straight from the same engine your coach uses.</p>
+  return <section className="panel promises" aria-label={title} id="promises"><h3 className="display">{title}</h3><p className="small dim">{p.tier} plan. What your coach committed to on this plan, and where each one stands.</p>
     <ul>{rows.map(({ promise, status }) => <li key={promise.id} className={`pr pr-${status.state}`} data-promise={promise.id}><span className="prdot" aria-hidden /><span className="grow"><b>{promise.text}</b><span className="small block">{status.label}</span></span><span className="prword">{STATUS_WORD[status.state]}</span></li>)}</ul></section>;
 }
 
@@ -37,22 +38,18 @@ export function WeekRhythm({ role }: { role: 'player' | 'coach' }) {
 
 /* ---------- unified feedback ---------- */
 export function FeedbackCard({ p, r, me, compact, hideReact }: { p: Player; r: Review; me: 'player' | 'parent' | 'coach'; compact?: boolean; hideReact?: boolean }) {
-  const s = useSnap(); const { run } = useStore(); const [ask, setAsk] = useState(false); const [q, setQ] = useState('');
+  const s = useSnap();
   const thread = s.messages.filter((m) => m.context === 'feedback' && m.refId === r.id).sort((a, b) => a.at.localeCompare(b.at));
-  const fam = me !== 'coach';
   const parts: [string, string, string][] = [['ok', 'What you did well', r.wentWell], ['adj', 'One adjustment', r.adjust], ['why', 'Why', r.why]];
   return <article className={`fb ${compact ? 'compact' : ''}`} id={`fb-${r.id}`} data-review={r.id}>
-    <header className="row between wrapx"><span className="kicker">{userName(s, r.reviewerId)} · {shortWhen(r.at)}{r.signedOffBy && r.signedOffBy !== r.reviewerId ? ` · checked by ${first(userName(s, r.signedOffBy))}` : ''}</span><span className={`pill st-${r.decision === 'approve' ? 'approved' : 'retry'}`}>{r.decision === 'approve' ? 'Approved' : 'Another attempt'}</span></header>
+    <header className="row between wrapx"><span className="kicker">{userName(s, r.reviewerId)} · {shortWhen(r.at)}{r.signedOffBy && r.signedOffBy !== r.reviewerId ? ` · checked by ${first(userName(s, r.signedOffBy))}` : ''}</span><span className={`pill st-${r.decision === 'approve' ? 'approved' : 'retry'}`}>{r.decision === 'approve' ? 'Approved' : 'Same rep again'}</span></header>
     {r.wentWell ? <dl className="fbgrid">{parts.map(([k, l, v]) => v && <div key={k} className={`fb-${k}`}><dt>{l}</dt><dd>{v}</dd></div>)}<div className="fb-next"><dt>Next rep</dt><dd>{r.nextRep}</dd></div></dl> : <blockquote className="quote sm">{r.feedback}</blockquote>}
     {r.notes && r.notes.length > 0 && <NoteList notes={r.notes} />}
     {me === 'coach' && <p className="row gap small"><AckStatus r={r} />{r.secondsSpent ? <span className="dim">⏱ {fmtSpent(r.secondsSpent)} to review</span> : null}</p>}
     {r.linkUrl && <a className="attach" href={r.linkUrl} target="_blank" rel="noreferrer noopener">🔗 {r.linkUrl.replace(/^https?:\/\//, '').slice(0, 48)}</a>}
-    {fam && !hideReact && r.status === 'final' && <div className="react">
-      {r.reaction === 'got_it' ? <span className="small">✓ Committed</span> : r.reaction === 'question' ? <span className="small">❓ Question sent{thread.some((m) => m.from === 'coach') ? ' · answered' : ` · reply ${thread.at(-1)?.dueBy ? `by ${shortWhen(thread.at(-1)!.dueBy!)}` : 'coming'}`}</span> : <>
-        <button className="react-b" onClick={() => run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'got_it' })}>Got it, I’ll do this</button>
-        <button className="react-b" aria-expanded={ask} onClick={() => setAsk(!ask)}>I have a question</button></>}</div>}
-    {ask && <form className="row gap" onSubmit={async (e) => { e.preventDefault(); if (await run({ type: 'reactFeedback', playerId: p.id, reviewId: r.id, reaction: 'question', question: q })) { setAsk(false); setQ(''); } }}>
-      <label className="sr" htmlFor={`q-${r.id}`}>Your question</label><input id={`q-${r.id}`} autoFocus className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="What part is unclear?" /><button className="btn" disabled={q.trim().length < 3}>Send question</button></form>}
+    {!hideReact && r.status === 'final' && me === 'coach' && r.teachBack && <TeachBackMark p={p} r={r} />}
+    {!hideReact && r.status === 'final' && me === 'parent' && r.teachBack && <TeachBack p={p} r={r} me="parent" />}
+    {!hideReact && r.status === 'final' && me === 'player' && r.teachBack && <TeachBack p={p} r={r} me="player" />}
     {thread.length > 0 && !compact && <ul className="fbthread">{thread.map((m) => <li key={m.id} className={`from-${m.from}`}><b>{m.from === 'coach' ? first(userName(s, m.authorId)) : m.from === 'parent' ? family(s, p).parentName : first(p.name)}:</b> {m.text}</li>)}</ul>}
   </article>;
 }

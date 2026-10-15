@@ -48,10 +48,10 @@ export function coachKnows(p: Player) {
 /** Weekly rhythm: Mon plan drop · Wed mid-week check-in · Fri wrap/reflection · Sun parent digest. */
 export type RhythmKey = 'plan-drop' | 'midweek' | 'wrap' | 'digest' | 'rest';
 export const RHYTHM: { key: RhythmKey; day: number; label: string; player: string; coach: string }[] = [
-  { key: 'plan-drop', day: 1, label: 'Mon · Plan drop', player: 'This week’s reps are on Today.', coach: 'Plans and adjustments go out.' },
-  { key: 'midweek', day: 3, label: 'Wed · Mid-week check-in', player: 'Log at least one rep by tonight.', coach: 'Nudge anyone without a check-in.' },
-  { key: 'wrap', day: 5, label: 'Fri · Wrap & reflect', player: 'Two lines on your week.', coach: 'Reflections land in your profile view.' },
-  { key: 'digest', day: 0, label: 'Sun · Parent summary', player: 'Your parent gets your week in a minute.', coach: 'Approve the drafted digests.' },
+  { key: 'plan-drop', day: 1, label: 'Mon · New week', player: 'Your focus for the week is on Today.', coach: 'Who is due a first look or a re-check?' },
+  { key: 'midweek', day: 3, label: 'Wed · Clips in', player: 'Send your clip on the day you picked.', coach: 'Read what came in. Write back by the window.' },
+  { key: 'wrap', day: 5, label: 'Fri · Check in', player: 'Rough week? Tell your coach. No stress.', coach: 'Check in with anyone who went quiet.' },
+  { key: 'digest', day: 0, label: 'Sun · Parent note', player: 'Your parent gets a short note on your week.', coach: 'Add a line to each note and approve.' },
 ];
-export function rhythmToday(d: Date) { return RHYTHM.find((r) => r.day === d.getDay()) ?? { key: 'rest' as const, day: d.getDay(), label: 'Train day', player: 'Do your next rep and today’s habits.', coach: 'Clear the queue.' }; }
+export function rhythmToday(d: Date) { return RHYTHM.find((r) => r.day === d.getDay()) ?? { key: 'rest' as const, day: d.getDay(), label: 'Train day', player: 'Do your next rep when it fits your week.', coach: 'Clear the queue.' }; }
 export const subsThisWeek = (s: Snapshot, pid: string, wk: string, weekKey: (d: Date) => string) => s.submissions.filter((x) => x.playerId === pid && weekKey(new Date(x.at)) === wk);

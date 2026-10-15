@@ -1,4 +1,4 @@
-import type { Assignment, Game, Snapshot } from './domain';
+import { SAVED_REPLIES, type Assignment, type Game, type Snapshot } from './domain';
 import { LIBRARY } from './library';
 export const DEMO_PASSWORD = 'demo-pass-123'; export const DEMO_PIN = '1234';
 export const DEMO_USERS = { head: 'u_head', assistant: 'u_asst', ops: 'u_ops' };
@@ -17,11 +17,13 @@ export function seed(base = new Date()): Snapshot {
   const habits = (pid: string, days: number[]) => days.flatMap((k) => ['Handles 10 min', 'Form shots 25', 'Sleep 9 h'].map((key) => ({ id: `h_${pid}_${k}_${key.length}`, playerId: pid, date: d(-k), key })));
   const R = (id: string, submissionId: string, playerId: string, decision: 'approve' | 'retry', wentWell: string, adjust: string, why: string, nextRep: string, at: string, reviewerId: string, signedOffBy: string | null, reaction: 'got_it' | null) => ({ id, submissionId, playerId, decision, wentWell, adjust, why, nextRep, linkUrl: null, feedback: composeFeedback({ learnStyle: playerId === 'avery' || playerId === 'nia' ? 'Watch, then try' : 'Explain the why' } as never, { wentWell, adjust, why, nextRep }), reaction, reactedAt: reaction ? at : null, at, reviewerId, status: 'final' as const, signedOffBy });
   const rub = (a: number, b: number, c: number, e: number, f: number) => ({ 'Ball security': a, Finishing: b, Defense: c, 'Shot form': e, Confidence: f });
-  return {
+  const snap: Snapshot = {
     version: 1, clockOffsetMs: 0,
-    settings: { programName: 'Baller Connection', accent: '#FF5E1A', availability: 'Mon–Fri 3–8 PM CT · Sat 9–12', sla: { Foundation: 2, Development: 1, 'Inner Circle': 0 }, capacity: 15, innerCircleCap: 4, requireSignoff: true, dueSoonHours: 6, inviteDays: 7,
+    settings: { programName: 'Baller Connection', accent: '#FF5E1A', availability: 'Mon–Fri 3–8 PM CT · Sat 9–12', sla: { Foundation: 2, Development: 1, 'Inner Circle': 1 }, capacity: 15, innerCircleCap: 4, requireSignoff: true, dueSoonHours: 6, inviteDays: 7,
       reviewsPerWeek: { Foundation: 1, Development: 3, 'Inner Circle': 99 }, officeHours: { days: [1, 2, 3, 4, 5, 6], start: 9, end: 20 }, urgentReplyHours: 4, cycleWeeks: 4,
-      savedReplies: ['Great question. Short answer: yes, same reps, same tempo.', 'Thanks for the heads-up. Lighten the day before a game: habits only.', 'Let’s cover this on your next session. I’ve added it to my notes.'] },
+      savedReplies: SAVED_REPLIES,
+      // Demo sample copy. In a real deployment the coach writes these in Settings (the defaults are marked placeholders).
+      coachProfile: { intro: 'I coach players one on one at Storm Basketball Training. This is how I keep coaching between sessions, so what we work on in the gym doesn’t stop when you leave.', why: 'Practice without a coach’s eyes on it mostly repeats habits, good and bad. I want every rep you send to get a real answer from me.', how: 'You send one clip of 30 seconds or less. I tell you one thing to change. You say it back in your own words. Your next clip shows me if it landed. Every 4 weeks we look at week 1 next to now.', lookFor: 'After your first look I’ll tell you one thing you already do well and the one thing we’ll start with.' } },
     users: [
       { id: 'u_head', name: 'Coach [Your Name]', email: 'head@demo.test', role: 'head', active: true },
       { id: 'u_asst', name: 'Jamie Reed', email: 'assistant@demo.test', role: 'assistant', active: true },
@@ -44,7 +46,7 @@ export function seed(base = new Date()): Snapshot {
       { id: 'mt1', playerId: 'riley', staffId: 'u_asst', at: new Date(base.getTime() + 26 * 36e5).toISOString(), minutes: 30, kind: 'live', note: 'Weekly live session', status: 'scheduled' },
       { id: 'mt2', playerId: 'avery', staffId: 'u_head', at: new Date(base.getTime() + 72 * 36e5).toISOString(), minutes: 20, kind: 'check-in', note: 'Monthly video check-in', status: 'scheduled' },
     ],
-    notifications: [], outbox: [], dataRequests: [], billingEvents: [],
+    notifications: [], outbox: [], dataRequests: [], billingEvents: [], sessions: [],
     // v7: fictional game logs. Avery's focus is starting to show up in games; Riley's isn't yet (transfer cue) and confidence dipped twice (coach-only flag).
     games: [
       G('g_av1', 'avery', 20, null, 'Eastside Hawks', { pts: 4, reb: 3, ast: 2, fgm: 2, fga: 9 }, 2, 3, 3, 'Hustled back on defense every time', 'Lost the ball driving left', null, true),
@@ -122,11 +124,32 @@ export function seed(base = new Date()): Snapshot {
     digests: [],
     events: [
       { id: 'e1', at: h(60), role: 'player', playerId: 'avery', type: 'transition', from: 'Work ready', to: 'Submitted', detail: 'Weak-hand finishing ladder: 3/5 sets' },
-      { id: 'e2', at: h(50), role: 'head', playerId: 'avery', type: 'transition', from: 'Submitted', to: 'Work ready', detail: 'Another attempt: Weak-hand finishing ladder' },
+      { id: 'e2', at: h(50), role: 'head', playerId: 'avery', type: 'transition', from: 'Submitted', to: 'Work ready', detail: 'Same rep again: Weak-hand finishing ladder' },
       { id: 'e3', at: h(30), role: 'parent', playerId: 'sam', type: 'transition', from: 'Onboarding', to: 'Plan building', detail: 'Onboarding complete — coach owes first plan' },
       { id: 'e4', at: h(26), role: 'player', playerId: 'riley', type: 'transition', from: 'Work ready', to: 'Submitted', detail: 'Form shooting: 5 spots · 5/5 sets' },
       { id: 'e5', at: h(20), role: 'ops', playerId: 'theo', type: 'transition', from: 'Fit review', to: 'Invited', detail: 'Invite sent (5/15 spots)' },
       { id: 'e6', at: h(10), role: 'head', playerId: 'nia', type: 'transition', from: 'Feedback due', to: 'Next step ready', detail: 'Approved: Hesitation into pull-up' },
     ],
   };
+  // ---- v9 demo data: first looks, rhythm, session notes, teach-backs, game notes, a private note ----
+  const pl = (id: string) => snap.players.find((x) => x.id === id)!; const wk = weekKey(base);
+  Object.assign(pl('avery'), { rhythmPlan: { repsPerWeek: 3, clipDay: 'Thursday' }, agreement: { at: h(300), by: 'u_dana' }, firstLook: { saw: 'You lose the ball when a defender shows on your left. Your right hand is already a weapon.', source: 'clip', at: h(238), by: 'u_head' }, parentNote: { week: wk, text: 'Avery is learning to slow down on the left hand before adding speed. It shows in the clips already.', by: 'u_head', at: h(20) } });
+  Object.assign(pl('riley'), { rhythmPlan: { repsPerWeek: 4, clipDay: 'Wednesday' }, agreement: { at: h(400), by: 'u_chris' }, firstLook: { saw: 'Your shot is good when your feet are set early. Late feet on the catch are the one thing to fix.', source: 'clip', at: h(198), by: 'u_asst' } });
+  Object.assign(pl('nia'), { rhythmPlan: { repsPerWeek: 3, clipDay: 'Monday' }, agreement: { at: h(260), by: 'u_ray' }, firstLook: { saw: 'You see the floor well. When the defense sags you stall instead of going downhill.', source: 'clip', at: h(218), by: 'u_asst' } });
+  Object.assign(pl('sam'), { rhythmPlan: { repsPerWeek: 2, clipDay: 'Saturday' }, agreement: { at: h(32), by: 'u_jo' } });
+  snap.sessions = [
+    { id: 'ses_av1', playerId: 'avery', coachId: 'u_head', date: d(-2), note: 'In the gym: she handled the trap better once she took one dribble away from it. Still picking the ball up early.', focus: 'Weak-hand control under pressure', cue: 'Dribble away from the trap, then look up', at: h(48) },
+    { id: 'ses_sam1', playerId: 'sam', coachId: 'u_head', date: d(-1), note: 'In-person intake at Storm: great motor. When a defender shows on his left he spins and gets stuck near the sideline. Calm feet first, speed later.', focus: 'Stay calm in traffic: two-dribble escapes', cue: 'Eyes up, dribble away from the defender', at: h(26) },
+  ];
+  const tb = (rid: string, change: string, notice: string, at: string, mark: 'got-it' | 'clarify' | null, note?: string) => { const r = snap.reviews.find((x) => x.id === rid)!; r.reaction = 'got_it'; r.teachBack = { change, notice, at, mark, markedAt: mark ? at : null, markedBy: mark ? r.reviewerId : null, note: note ?? null }; };
+  tb('r_av1', 'I’ll keep my hips at the same height on every switch.', 'I’ll lose it less when they switch on me.', h(98), 'got-it', 'Yes. That’s the one.');
+  tb('r_av2', 'I’ll do three slow walk-through reps with my left hand before I go game speed.', 'I think I’ll stop panicking when they come at my left side.', h(48), null);
+  tb('r_ni1', 'Keep my eyes up and add a hesitation.', 'I’ll see the open pass earlier.', h(128), 'got-it');
+  for (const g of snap.games) { g.carried = g.wellDone; g.missed = g.replay || null; }
+  const mk = (id: string, mark: 'carried' | 'partly' | 'not-yet', note: string) => { const g = snap.games.find((x) => x.id === id)!; g.mark = mark; g.markNote = note; g.markedAt = g.at; g.seenAt = g.at; g.seenBy = 'u_head'; };
+  mk('g_av4', 'carried', 'That’s the left hand under pressure. Exactly it.'); mk('g_av3', 'partly', 'Stayed low, rushed the finish. Next: slow it down.'); mk('g_ri1', 'partly', 'Good look. The hesitation is the next piece.');
+  const av = snap.clips; for (const [cid, sid, aid, at, wf] of [['clip_avery1', 's_av1', 'a_av1', h(120), 'My left hand on the switch'], ['clip_avery2', 's_av2', 'a_av2', h(60), 'My left hand on the finish']] as const) av.push({ id: cid, playerId: 'avery', assignmentId: aid, submissionId: sid, storageKey: DEMO_CLIP_KEY, mime: 'video/mp4', bytes: 258875, durationSec: 12, watchFor: wf, uploadedBy: 'u_avery', at, deleteAfter: new Date(new Date(at).getTime() + 90 * 864e5).toISOString(), deletedAt: null });
+  snap.submissions.find((x) => x.id === 's_av1')!.clipId = 'clip_avery1'; snap.submissions.find((x) => x.id === 's_av2')!.clipId = 'clip_avery2';
+  snap.messages.push({ id: 'm4', playerId: 'avery', from: 'player', authorId: 'u_avery', readBy: {}, context: 'stuck', text: 'What happened: Got trapped three times in the scrimmage.\nHow I’m feeling: annoyed', at: h(3), dueBy: addBusinessDays(new Date(h(3)), 1).toISOString(), answered: false });
+  return snap;
 }

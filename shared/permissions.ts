@@ -1,5 +1,5 @@
 import { canSeeClip } from './clips';
-import type { Command, CommandType, Player, Role, Snapshot, UserRole } from './domain';
+import { PRIVATE_CONTEXTS, type Command, type CommandType, type Player, type Role, type Snapshot, type UserRole } from './domain';
 
 export interface Actor { id: string; role: Role; familyId?: string | null; playerId?: string | null }
 export const SYSTEM: Actor = { id: 'system', role: 'system' };
@@ -24,11 +24,12 @@ export const COMMAND_ROLES: Record<CommandType, Role[]> = {
   completeCycleReview: COACH, adjustPlan: COACH, approveDigests: COACH,
   registerClip: FAMILY, deleteClip: ['parent', 'player', 'head', 'assistant'], setWorkingOn: FAMILY, saveDrillFeedback: COACH,
   billingEvent: ['system'], joinWaitlist: ['parent', 'head', 'ops'], setEmailPrefs: ['head', 'assistant', 'ops', 'parent', 'player', 'system'],
-  logGame: FAMILY, setAffirmation: FAMILY, reviewGame: COACH, addNote: COACH, tagWin: COACH, setCard: ['parent'],
+  logGame: FAMILY, setAffirmation: FAMILY, markGame: COACH, addNote: COACH, tagWin: COACH, setCard: ['parent'],
+  /** v9 */ teachBack: ['player'], markTeachBack: COACH, logSession: COACH, setRhythm: FAMILY, roughWeek: FAMILY, sendStuck: ['player'], sendCheckIn: COACH, setGamify: FAMILY, requestProbe: COACH, setParentNote: COACH,
   sweep: ['system'], generateDigests: ['system', 'head'], advanceClock: ['system'],
 };
 /** Commands an assistant may only run on players assigned to them. */
-const ASSIGNED_ONLY: CommandType[] = ['publishPlan', 'review', 'updateCanvas', 'rateSkill', 'approveDigest', 'sendMessage', 'markRead', 'scheduleSession', 'completeCycleReview', 'adjustPlan', 'setTournament', 'deleteClip', 'reviewGame', 'addNote', 'tagWin'];
+const ASSIGNED_ONLY: CommandType[] = ['publishPlan', 'review', 'updateCanvas', 'rateSkill', 'approveDigest', 'sendMessage', 'markRead', 'scheduleSession', 'completeCycleReview', 'adjustPlan', 'setTournament', 'deleteClip', 'markGame', 'addNote', 'tagWin', 'markTeachBack', 'logSession', 'sendCheckIn', 'requestProbe', 'setParentNote'];
 
 export class PermissionError extends Error {}
 const pid = (c: Command): string | undefined => ('playerId' in c ? (c as { playerId?: string }).playerId : undefined);
@@ -64,7 +65,7 @@ export function scopeSnapshot(s: Snapshot, a: Actor): Snapshot {
     invites: by(s.invites).map((i) => (a.role === 'ops' ? i : { ...i, tokenHash: '', codeHash: '' })),
     consents: by(s.consents), cycles: by(s.cycles), assignments: by(s.assignments), submissions: by(s.submissions),
     reviews: by(s.reviews).filter((r) => !family || r.status === 'final'),
-    messages: a.role === 'ops' ? [] : by(s.messages), reflections: by(s.reflections), cycleReviews: by(s.cycleReviews), clips: a.role === 'ops' ? [] : by(s.clips ?? []).filter((c) => canSeeClip(a, players.find((p) => p.id === c.playerId), c)), habits: by(s.habits), milestones: by(s.milestones),
+    messages: a.role === 'ops' ? [] : by(s.messages).filter((m) => a.role !== 'parent' || !PRIVATE_CONTEXTS.includes(m.context)), reflections: by(s.reflections), cycleReviews: by(s.cycleReviews), clips: a.role === 'ops' ? [] : by(s.clips ?? []).filter((c) => canSeeClip(a, players.find((p) => p.id === c.playerId), c)), habits: by(s.habits), milestones: by(s.milestones),
     digests: by(s.digests).filter((d) => !family || d.status === 'approved'),
     meetings: s.meetings.filter((m) => (m.playerId ? ids.has(m.playerId) : a.role === 'ops' || m.staffId === a.id)),
     drills: family || a.role === 'ops' ? s.drills.filter(() => !family) : s.drills, templates: coaching ? s.templates : [],
@@ -72,6 +73,7 @@ export function scopeSnapshot(s: Snapshot, a: Actor): Snapshot {
     outbox: a.role === 'ops' ? s.outbox : [],
     dataRequests: a.role === 'ops' ? s.dataRequests : by(s.dataRequests),
     subscriptions: a.role === 'ops' ? s.subscriptions ?? [] : family ? by(s.subscriptions ?? []) : [], billingEvents: [],
+    sessions: a.role === 'ops' ? [] : by(s.sessions ?? []),
     games: a.role === 'ops' ? [] : by(s.games ?? []), wins: a.role === 'ops' ? [] : by(s.wins ?? []),
     timelineNotes: a.role === 'ops' ? [] : by(s.timelineNotes ?? []).filter((n) => !family || (n.status === 'approved' && n.kind !== 'cue')),
     events: s.events.filter((e) => (a.role === 'ops' ? true : !!e.playerId && ids.has(e.playerId))).map((e) => (family && e.type === 'rubric' ? { ...e, detail: 'Rubric updated' } : e)),

@@ -26,12 +26,12 @@ describe('invites + consent', () => {
     expect(s.outbox.at(-1)!.body).toContain(r.created!.inviteToken!);
     s = dispatch(s, { type: 'acceptInvite', code: r.created!.inviteCode, parentName: 'Lou Rook', email: 'lou@demo.test', userId: 'u_lou' }, { id: 'public', role: 'public' }).snapshot;
     expect(P(s, kai.id).state).toBe('Onboarding'); const lou: Actor = { id: 'u_lou', role: 'parent', familyId: kai.familyId };
-    expect(() => dispatch(s, { type: 'completeOnboarding', playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' }, lou)).toThrow(/pay/i);
+    expect(() => dispatch(s, { type: 'completeOnboarding', agreed: true, playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' }, lou)).toThrow(/pay/i);
     s = dispatch(s, { type: 'billingEvent', eventId: 'evt_kai_1', kind: 'checkout_completed', playerId: kai.id, tier: 'Foundation' }, { id: 'system', role: 'system' }).snapshot;
-    expect(() => dispatch(s, { type: 'completeOnboarding', playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' }, lou)).toThrow(/consent/i);
-    s = run(s, lou, { type: 'recordConsent', playerId: kai.id, guardianName: 'Lou Rook', agreed: true }, { type: 'completeOnboarding', playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' });
+    expect(() => dispatch(s, { type: 'completeOnboarding', agreed: true, playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' }, lou)).toThrow(/consent/i);
+    s = run(s, lou, { type: 'recordConsent', playerId: kai.id, guardianName: 'Lou Rook', agreed: true }, { type: 'completeOnboarding', agreed: true, playerId: kai.id, position: 'Guard', goal: 'Left hand', learnStyle: 'Video', rhythm: '3 days' });
     expect(s.consents.find((c) => c.playerId === kai.id)?.at).toBeTruthy(); expect(P(s, kai.id).state).toBe('Plan building');
-    expect(buildQueue(s, 'u_head').some((q) => q.player.id === kai.id && q.kind === 'Plan needed')).toBe(true);
+    expect(buildQueue(s, 'u_head').some((q) => q.player.id === kai.id && q.kind === 'First look')).toBe(true);
     expect(s.notifications.some((n) => n.userId === 'u_head' && n.type === 'invite_accepted')).toBe(true);
   });
   it('expired invites are rejected and swept to ops', () => {
@@ -67,7 +67,7 @@ describe('cron sweep + notifications', () => {
   });
   it('Submitted → Feedback due after 24h', () => { let s = run(seed(), AVERY, { type: 'submitRep', playerId: 'avery', repsDone: 2, reflection: 'Kept it low today' }); s = run(s, SYSTEM, { type: 'advanceClock', hours: 25 }); expect(P(s, 'avery').state).toBe('Feedback due'); });
   it('plan published + new submission + cycle review notify the right people', () => {
-    let s = seed(); s = run(s, HEAD, { type: 'publishPlan', playerId: 'sam', focus: 'Weak hand', drillIds: ['d1'] }); expect(s.notifications.some((n) => n.userId === 'u_sam' && n.type === 'plan_published')).toBe(true);
+    let s = seed(); s = run(s, HEAD, { type: 'publishPlan', saw: 'Quick hands, eyes drop under pressure.', playerId: 'sam', focus: 'Weak hand', drillIds: ['d1'] }); expect(s.notifications.some((n) => n.userId === 'u_sam' && n.type === 'plan_published')).toBe(true);
     s = run(s, { id: 'u_sam', role: 'player', playerId: 'sam' }, { type: 'openPlan', playerId: 'sam' }, { type: 'submitRep', playerId: 'sam', repsDone: 1, reflection: 'Did it all' }); expect(s.notifications.some((n) => n.userId === 'u_head' && n.type === 'new_submission')).toBe(true);
     s = run(s, HEAD, { type: 'review', playerId: 'sam', decision: 'approve', wentWell: 'Great. Keep it low.', adjust: 'Keep eyes up', why: 'It builds control' }); s = run(s, { id: 'u_sam', role: 'player', playerId: 'sam' }, { type: 'startNext', playerId: 'sam' }); expect(P(s, 'sam').state).toBe('Cycle review'); expect(s.notifications.some((n) => n.type === 'cycle_review')).toBe(true);
   });
@@ -78,7 +78,7 @@ describe('library, settings, privacy', () => {
   it('coach creates, edits and reuses drills and templates', () => {
     let s = run(seed(), HEAD, { type: 'saveDrill', drill: { title: 'Mikan', reps: 3, minutes: 5, cues: ['Soft touch'], tags: ['finishing'] } }); const d = s.drills.at(-1)!;
     s = run(s, HEAD, { type: 'saveDrill', drill: { ...d, title: 'Mikan drill' } }, { type: 'saveTemplate', template: { name: 'Finisher', focus: 'Touch', drillIds: [d.id] } }); expect(s.drills.at(-1)!.title).toBe('Mikan drill');
-    s = run(s, HEAD, { type: 'publishPlan', playerId: 'sam', focus: 'Touch', drillIds: s.templates.at(-1)!.drillIds, templateId: s.templates.at(-1)!.id }); expect(s.assignments.at(-1)!.drillId).toBe(d.id);
+    s = run(s, HEAD, { type: 'publishPlan', saw: 'Quick hands, eyes drop under pressure.', playerId: 'sam', focus: 'Touch', drillIds: s.templates.at(-1)!.drillIds, templateId: s.templates.at(-1)!.id }); expect(s.assignments.at(-1)!.drillId).toBe(d.id);
   });
   it('rejects non-URL attachments', () => { expect(() => dispatch(seed(), { type: 'sendMessage', playerId: 'avery', text: 'see', linkUrl: 'javascript:alert(1)' }, PARENT_PINE)).toThrow(/http/); });
   it('read receipts', () => { const s = run(seed(), ASST, { type: 'markRead', playerId: 'riley' }); expect(s.messages.filter((m) => m.playerId === 'riley' && m.authorId !== 'u_asst').every((m) => m.readBy.u_asst)).toBe(true); });

@@ -4,6 +4,7 @@ import { Logo } from '../App';
 import { useStore } from '../store';
 import { suggestTier } from '../../shared/engine';
 import { TIERS } from '../../shared/domain';
+import { FIT } from '../site/content';
 
 type Q = { id: string; q: string; help?: string; opts?: string[]; text?: string };
 const QS: Q[] = [
@@ -11,8 +12,9 @@ const QS: Q[] = [
   { id: 'age', q: 'How old is the player?', opts: ['Under 10', '10–12', '13–14', '15–16', '17+'] },
   { id: 'days', q: 'How many days a week can they practice on their own?', help: 'Even 15 minutes counts.', opts: ['0–1 days', '2 days', '3–4 days', '5+ days'] },
   { id: 'want', q: 'Whose idea is this?', opts: ['The player is asking for it', 'Both of us', 'Mostly mine (parent)'] },
-  { id: 'need', q: 'What would help most right now?', opts: ['A plan and accountability', 'Plan + regular feedback', 'Weekly live coaching', 'In-person team practice', 'Full game-film breakdown'] },
+  { id: 'need', q: 'What would help most right now?', opts: ['A clear next step each week', 'Plan + regular feedback', 'Weekly live coaching', 'In-person team practice', 'Full game-film breakdown'] },
   { id: 'goal', q: 'In one sentence, what’s the goal for this season?', text: 'goal', help: 'Example: “Make the 8th-grade A team.”' },
+  { id: 'playerWords', q: 'Player: in your own words, what do you want to get better at?', text: 'playerWords', help: 'Players, type this yourself if you can. A parent can sit next to you. One sentence is plenty. If it’s left short, the coach will ask you directly.' },
 ];
 
 export default function Apply() {
@@ -32,9 +34,9 @@ export default function Apply() {
             <div className="big">✓</div><h1 className="display">{done === 'call' ? 'Call requested' : done === 'waitlist' ? 'You’re on the list' : 'Application in'}</h1>
             <ol className="timeline">
               <li className="done"><b>Now</b> Application saved. Status: <span className="pill st-applied">Applied</span></li>
-              <li className="on"><b>Within 2 business days</b> The coach reviews fit and capacity ({done === 'call' ? 'and emails 3 call times' : 'Fit review'}).</li>
+              <li className="on"><b>Within 2 business days</b> The coach reads your answers, including the player’s own words ({done === 'call' ? 'and emails 3 call times' : 'a short fit check'}).</li>
               <li><b>Then</b> You get an invite, or a waitlist spot if the roster is full.</li>
-              <li><b>After invite</b> 5 short onboarding screens, then the first plan.</li>
+              <li><b>After invite</b> A few short setup screens, a clip of how the player plays, then the coach’s first look.</li>
             </ol>
             <p className="note">Demo: saved in the demo engine only. Nothing was emailed.</p>
             <div className="row gap center"><Link className="btn" to="/coach">See it arrive in the coach queue →</Link><Link className="btn ghost" to="/welcome">Preview onboarding</Link></div>
@@ -44,7 +46,8 @@ export default function Apply() {
             <p className="kicker orange">Your result</p>
             <h1 className="display">{res.fit === 'fit' ? 'Looks like a great fit.' : 'Not the right fit yet.'}</h1>
             <p className="lead">{res.why}</p>
-            {res.fit !== 'notyet' && <div className="suggest"><span>Suggested plan</span><strong>{res.tier}</strong><span>${TIERS[res.tier].price}/mo · replies {TIERS[res.tier].replyLabel}</span></div>}
+            {res.fit !== 'notyet' && <div className="suggest"><span>Suggested plan</span><strong>{res.tier}</strong><span>${TIERS[res.tier].price}/mo · coach writes back {TIERS[res.tier].replyLabel}</span></div>}
+            <details className="fitlist" open={res.fit === 'notyet'}><summary className="strong small">Good fit / not a fit</summary><div className="fitgrid"><div><b>Good fit</b><ul>{FIT.good.map((x) => <li key={x}>{x}</li>)}</ul></div><div><b>Not a fit</b><ul>{FIT.not.map((x) => <li key={x}>{x}</li>)}</ul></div></div></details>
             {res.tier === 'Inner Circle' && <p className="small dim">Inner Circle has 4 spots. If they’re full when the coach reviews, you’ll be waitlisted automatically.</p>}
             {sp.get('tier') && sp.get('tier') !== res.tier && <p className="small dim">You started from {sp.get('tier')}. The coach will talk through either option.</p>}
             <div className="row gap">

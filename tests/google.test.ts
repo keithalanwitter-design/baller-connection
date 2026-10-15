@@ -13,7 +13,7 @@ async function signer(kid = 'k1') {
   const sign = async (claims: object, head: object = { alg: 'RS256', kid, typ: 'JWT' }) => { const h = b64u(enc.encode(JSON.stringify(head))); const c = b64u(enc.encode(JSON.stringify(claims))); return `${h}.${c}.${b64u(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, enc.encode(`${h}.${c}`)))}`; };
   return { jwk, sign };
 }
-const NOW = Date.parse('2026-10-14T21:00:00Z');
+const NOW = Math.floor(Date.now() / 1000) * 1000; // real clock: the HTTP flow below verifies the token against Date.now()
 const claims = (o: object = {}) => ({ iss: 'https://accounts.google.com', aud: CID, sub: 'g-123', email: 'dana@demo.test', email_verified: true, iat: NOW / 1000 - 10, exp: NOW / 1000 + 3600, nonce: 'n1', ...o });
 const jwksFetch = (keys: object[]) => (async (u: string) => { if (u === GOOGLE.jwks) return Response.json({ keys }); throw new Error('unexpected ' + u); }) as unknown as typeof fetch;
 afterEach(() => { resetJwksCache(); vi.unstubAllGlobals(); });

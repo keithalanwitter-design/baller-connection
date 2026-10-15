@@ -324,7 +324,7 @@ export async function handle(req: Request, env: Env): Promise<Response> {
   }
 }
 async function wipe(db: Db) {
-  const tables = ['events', 'timeline_notes', 'wins', 'games', 'billing_events', 'subscriptions', 'push_subscriptions', 'oauth_identities', 'magic_tokens', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
+  const tables = ['events', 'sessions', 'timeline_notes', 'wins', 'games', 'billing_events', 'subscriptions', 'push_subscriptions', 'oauth_identities', 'magic_tokens', 'clips', 'reflections', 'cycle_reviews', 'data_requests', 'outbox', 'notifications', 'meetings', 'digests', 'milestones', 'habits', 'messages', 'reviews', 'submissions', 'assignments', 'templates', 'drills', 'cycles', 'consents', 'invites', 'applications', 'auth_sessions', 'password_tokens', 'credentials', 'login_attempts', 'users', 'players', 'families', 'settings', 'meta'];
   await db.batch([db.prepare('PRAGMA defer_foreign_keys = ON'), ...tables.map((t) => db.prepare(`DELETE FROM ${t}`))]);
 }
 export type { Snapshot };

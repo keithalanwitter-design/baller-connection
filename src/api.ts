@@ -8,7 +8,7 @@ import { buildOpsQueue, buildQueue, teamLoad } from '../shared/workflow';
 import { checkoutBlock, mockPriceToTier, mockStripeEvents, stripeToCommand, type MockOutcome } from '../shared/billing';
 import type { Tier } from '../shared/domain';
 
-const KEY = 'baller-connection-v7';
+const KEY = 'baller-connection-v9';
 /** Demo uploads: object URLs that live only in this tab (nothing leaves the browser). */
 const MEM = new Map<string, string>();
 const staticClip = (key: string) => `${import.meta.env.BASE_URL}${key}`;
