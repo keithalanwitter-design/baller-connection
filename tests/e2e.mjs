@@ -168,11 +168,11 @@ await pg.locator('.demobar').getByRole('button', { name: 'Head coach' }).click()
 
 // Clock + SLA escalation, messages
 await go('/app/messages?p=avery'); await pg.fill('#nm', 'Can I do extra sets on Saturday?'); await pg.getByRole('button', { name: 'Send' }).click(); await pg.waitForTimeout(300); ok(/Coach replies by/.test(await pg.locator('.uthread').innerText()), 'message shows its expected reply time');
-await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Avery Pine' }).filter({ hasText: /Reply needed/i }).count() === 1, 'player message → Reply needed');
+await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Avery Pine' }).filter({ hasText: /extra sets/ }).count() === 1, 'player message → Reply needed');
 await pg.getByRole('button', { name: /\+1 day/ }).click(); await pg.waitForTimeout(300); await gotIt(); ok(await queueMatches(), 'queue counts equal rows after +1 day');
 const kinds = await pg.locator('.queue .qrow').evaluateAll((els) => els.map((e) => e.classList.contains('overdue'))); ok(kinds.indexOf(false) === -1 || !kinds.slice(kinds.indexOf(false)).includes(true), 'overdue items ranked first');
-await go('/coach'); await pg.locator('.qrow', { hasText: 'Avery Pine' }).filter({ hasText: /Reply needed/i }).click(); await pg.waitForTimeout(300); await shot('40-coach-thread', false); await pg.fill('#msg', 'Yes, two extra sets.'); await pg.getByRole('button', { name: 'Send' }).click();
-await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Avery Pine' }).filter({ hasText: /Reply needed/i }).count() === 0, 'coach reply clears Reply needed');
+await go('/coach'); await pg.locator('.qrow', { hasText: 'Avery Pine' }).filter({ hasText: /extra sets/ }).click(); await pg.waitForTimeout(300); await shot('40-coach-thread', false); await pg.fill('#msg', 'Yes, two extra sets.'); await pg.getByRole('button', { name: 'Send' }).click();
+await go('/coach'); ok(await pg.locator('.qrow', { hasText: 'Avery Pine' }).filter({ hasText: /extra sets/ }).count() === 0, 'coach reply clears Reply needed');
 await go('/coach/player/riley?tab=canvas'); await shot('10-coach-player-canvas', false);
 
 // Parent: pause/resume + digest

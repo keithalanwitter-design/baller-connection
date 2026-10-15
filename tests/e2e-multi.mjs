@@ -59,7 +59,7 @@ await parent.pg.getByLabel('Player username').fill('kai.rook'); await parent.pg.
 
 // 4 · Assistant: Activation → Plan needed in *their* queue → publish from a template
 const asst = await persona('assistant'); await asst.login('assistant@demo.test', 'demo-pass-123');
-ok(await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Plan needed' }).count() === 1, 'routed: Kai’s Plan needed is in the assistant’s queue');
+ok(await asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'First look' }).count() === 1, 'routed: Kai’s First look is in the assistant’s queue');
 ok(await asst.pg.locator('.qrow', { hasText: 'Avery Pine' }).count() === 0, 'routed: head coach’s players are not in the assistant queue');
 await asst.go('/coach/library'); await asst.pg.fill('#dt', 'Mikan drill'); await asst.pg.getByLabel('Cue 1').fill('Soft touch off the glass'); await asst.pg.getByRole('button', { name: 'Add to library' }).click(); await asst.pg.waitForTimeout(400);
 ok(await asst.pg.locator('.drill', { hasText: 'Mikan drill' }).count() === 1, 'coach adds a drill to the library');
