@@ -7,6 +7,17 @@ Keith Witter's virtual player-development program, rebuilt as a multi-user produ
 - **Live demo (GitHub Pages):** https://keithalanwitter-design.github.io/baller-connection/ This build runs the same engine in your browser on fictional data. The demo bar switches between **Player · Parent · Head coach · Assistant · Ops**.
 - **Real product:** the same app served by a Cloudflare Worker with D1, sessions and cron. See **[DEPLOY.md](DEPLOY.md)**.
 
+## What's new in v9: a coach who sees your reps between sessions
+Strategy: [BUILD-PLAN-v9.md](BUILD-PLAN-v9.md). Tone: [VOICE.md](VOICE.md). Promises: [PROMISES.md](PROMISES.md) (18, each with an enforcement test). `git checkout v8-final` restores the previous version.
+- **The loop**: the coach picks a focus from what he saw (intake clip or an in-person session note, shown to the player as "From your session on Tue") → one clip of 30 s or less → one specific adjustment → the player **says it back in their own words** (optional; coach marks "got it" or "let's clarify") → the next clip shows the change → re-check every 4 weeks (week 1 beside now).
+- **Coach relationship**: Meet-your-coach in onboarding (his own words, edited in Settings), a first look written by the coach before the first plan can publish, warm saved replies and "check in on you" starters.
+- **Accountability that isn't homework**: an agreed rhythm, a Friday "rough week?" offer (light week / reset / talk to my coach), streaks and points off by default, no transfer-rate percentage (a game note plus the coach's mark: carried over / partly / not yet).
+- **"I'm stuck"** on every player screen: a private note to the coach, a reply inside the plan's window. Never shown to parents.
+- **Parents**: one sentence on what this means this week plus three do/don't tips, a roles agreement at onboarding, a Sunday note and timeline, no per-clip alerts unless they opt in.
+- **Fit**: "Good fit / not a fit" on Plans and Apply; the application asks the player for their own words and flags parent-only applications for the coach.
+- **Removed or hidden**: points, levels and confetti (opt-in streaks only), public card stats, the numeric transfer rate, spot-check verification, many queue types, per-rep parent alerts, demo-bar tools on phones (behind "Tools").
+- Earlier sections below are history. Where they mention levels, streaks, transfer rates, "Got it, I'll do this" or the Player Card level, v9 replaced them (see BUILD-PLAN-v9.md).
+
 ## What's new in v8: one promise, a premium site, Google sign-in
 - **Positioning** ([POSITIONING.md](POSITIONING.md)): *Make practice show up in games.* Three pillars (one clear weekly plan · a real coach watching · proof in games), the proof points the app enforces, and what we don't do.
 - **New site map**: Home · How it works (a week in the life) · Method · For parents · Plans (comparison + FAQ) · Coach (placeholder) · Apply · Sign in · 404. Same header, footer and sticky mobile CTA on every page.
@@ -113,8 +124,8 @@ Local demo accounts (seeded only when `SEED=demo`): `head@demo.test`, `assistant
 ## Pricing
 | Plan | Price | Default reply window | Includes |
 |---|---|---|---|
-| Foundation | $69/mo | 2 business days | One focus, weekly reps, 1 review/week, habits and levels, parent summary |
-| Development | $139/mo | 1 business day | + up to 3 reviews/week, plan adjusted every 2 weeks, monthly 20-min video check-in |
-| Inner Circle | $229/mo (cap in settings) | Same business day | + weekly 30-min live session, review on every submission, pre-tournament plan |
+| Foundation | $69/mo | 2 business days | First look, one focus at a time, 1 review/week, say-it-back, parent note |
+| Development | $139/mo | 1 business day | + up to 3 reviews/week, monthly 20-min video check-in |
+| Inner Circle | $229/mo (cap in settings) | Same business day | + weekly 30-min live session, a review on every clip |
 
 Reply windows and caps can be edited in Settings. Billing runs through Stripe Checkout and the Customer Portal (v6); without keys the app simulates checkout in test mode. Sign-in supports magic links, passwords and the under-13 PIN. Email goes through the log provider by default, or Resend/Postmark. See DEPLOY.md.
