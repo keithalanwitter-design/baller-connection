@@ -106,7 +106,7 @@ const kaiId = (await asst.api('/api/snapshot')).snapshot.players.find((p) => p.n
 ok((await player.api('/api/notifications')).some((n) => n.type === 'teachback' && /got it/i.test(n.text)), 'live: coach marks “got it” → the player is told');
 ok((await parent.api('/api/snapshot')).snapshot.reviews.some((r) => r.teachBack?.mark === 'got-it'), 'live: the parent can see the teach-back and the mark');
 // 8d · “I’m stuck” stays private: coach sees it, the parent’s snapshot never contains it
-await player.go('/app'); await player.gotIt(); await player.pg.locator('#stuck-btn').click(); await player.pg.fill('#st-happened', 'Kept losing it at open gym and I felt bad'); await player.pg.locator('#stuck-send').click(); await player.pg.waitForTimeout(600); await player.shot('36-player-stuck', false);
+await player.go('/app'); await player.gotIt(); await player.pg.locator('#stuck-btn').click(); await player.pg.fill('#st-happened', 'Kept losing it at open gym and I felt bad'); await player.pg.locator('#stuck-send').click(); await player.pg.waitForTimeout(600); await player.shot('36-player-stuck', false); await player.pg.getByRole('button', { name: 'Close' }).click();
 ok(!JSON.stringify((await parent.api('/api/snapshot')).snapshot.messages).includes('open gym and I felt bad'), 'live: the parent’s data never contains the stuck note');
 await asst.go('/coach'); const stuckRow = asst.pg.locator('.qrow', { hasText: 'Kai Rook' }).filter({ hasText: 'Check in' }); ok(await stuckRow.count() === 1, 'live: the coach has a private “Check in” item'); await stuckRow.click(); await asst.pg.waitForTimeout(400); await asst.pg.fill('#msg', 'Glad you told me. Everybody has those. See you Thursday.'); await asst.pg.getByRole('button', { name: 'Send' }).click(); await asst.pg.waitForTimeout(500);
 ok((await player.api('/api/snapshot')).snapshot.messages.some((m) => ['checkin', 'stuck'].includes(m.context) && m.from === 'coach' && /Glad you told me/.test(m.text)), 'live: the coach’s own reply reaches the player'); ok(!JSON.stringify((await parent.api('/api/snapshot')).snapshot.messages).includes('Glad you told me'), 'live: and still never reaches the parent');
@@ -114,7 +114,7 @@ ok((await player.api('/api/notifications')).some((n) => n.type === 'feedback_rea
 
 // 9 · Digest: coach approves, parent sees it + account/privacy tools
 await asst.go('/coach/digest'); await asst.pg.locator('.panel', { hasText: 'Kai Rook' }).getByRole('button', { name: /Approve/ }).click(); await asst.pg.waitForTimeout(400);
-await parent.go('/parent'); await parent.pg.waitForTimeout(800); const pv = await parent.pg.locator('main').innerText();  console.log('PV>>', pv.slice(0, 1800).replace(/\n/g, ' | ')); ok(/weekly note/i.test(pv) && /Kai sent \d+ check-in/.test(pv) && /What this means this week/i.test(pv), 'parent sees the approved digest and the one-sentence week');
+await parent.go('/parent'); await parent.pg.waitForTimeout(800); const pv = await parent.pg.locator('main').innerText();  ok(/weekly note/i.test(pv) && /Kai is working on/.test(pv) && /What this means this week/i.test(pv), 'parent sees the approved digest and the one-sentence week');
 ok(/Consent/i.test(pv) && /Given by Lou Rook/.test(pv), 'parent sees the timestamped consent record'); await parent.shot('29-parent-digest');
 ok((await parent.api('/api/outbox')).error, 'parent is denied the outbox (403)');
 

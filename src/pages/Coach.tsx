@@ -21,7 +21,7 @@ import { CoachBilling, Outbox } from '../v6';
 import { PressureBadge, ShotSummary, StoryEditor, WinsWall } from '../v7';
 import { shotsFor } from '../../shared/games';
 import { CheckInForm, GameNotes, ParentNoteForm, ProbeForm, SessionForm, SinceWeek1 } from '../v9';
-import { latestSession, sessionLine } from '../../shared/v9';
+import { latestSession, parentSentence, sessionLine } from '../../shared/v9';
 import { DEFAULT_COACH_PROFILE, PRESSURE_LABEL, type Pressure } from '../../shared/domain';
 
 const k = (x: string) => x.split(' ')[0].toLowerCase().replace(/[^a-z]/g, '');
@@ -281,7 +281,7 @@ function PlanBuilder() {
 function Digest() {
   const s = useSnap(); const { run } = useStore(); const wk = weekKey(clock(s)); const [edits, setEdits] = useState<Record<string, string>>({});
   const active = s.players.filter((p) => !['Applied', 'Fit review', 'Waitlist', 'Invited', 'Onboarding'].includes(p.state));
-  const fallback = (p: Player) => { return `${first(p.name)}: focus is ${playerCycle(s, p.id)?.focus ?? 'coming after the first look'}. Add one sentence about what you saw this week.`; };
+  const fallback = (p: Player) => parentSentence(s, p).text;
   const drafts = active.filter((p) => s.digests.some((x) => x.playerId === p.id && x.week === wk && x.status === 'draft'));
   return (<><h1 className="display">Weekly digest</h1><p className="dim">Sunday’s job drafts one per player: clips sent, this week’s one-sentence read for the parent, and the last game note. Add a line in your own voice, then approve. The parent gets it in-app and by email.</p>
     {drafts.length > 1 && <button className="btn" onClick={() => run({ type: 'approveDigests', items: drafts.map((p) => ({ playerId: p.id, text: edits[p.id] ?? s.digests.find((x) => x.playerId === p.id && x.week === wk)!.text })) })}>Approve all {drafts.length} drafts</button>}
