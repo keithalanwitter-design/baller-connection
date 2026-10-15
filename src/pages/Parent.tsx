@@ -43,7 +43,7 @@ function Account({ p }: { p: Player }) {
 
 /** What you and your player agreed to, and what stays private. */
 function Roles({ p }: { p: Player }) {
-  const s = useSnap(); const { run, as } = useStore(); const u = s.users.find((x) => x.id === as?.id); const fn = first(p.name); const coach = first(userName(s, p.coachId));
+  const s = useSnap(); const { run, as } = useStore(); const u = s.users.find((x) => x.id === as?.id) ?? s.users.find((x) => x.role === 'parent' && x.familyId === p.familyId); const fn = first(p.name); const coach = first(userName(s, p.coachId));
   return <section className="panel" id="roles"><h3 className="display">How we work together</h3>
     <ul className="plain small"><li><b>{fn}’s job:</b> send a clip, write what happened, and say the adjustment back in their own words.</li><li><b>Your job:</b> ask about the rep, not the result. Let {fn} own the clip day.</li><li><b>{coach}’s job:</b> watch every clip, write back by the reply window, and set the next focus.</li></ul>
     {p.agreement ? <p className="small dim">Agreed {shortWhen(p.agreement.at)}.</p> : <p className="small dim">Not yet agreed.</p>}
