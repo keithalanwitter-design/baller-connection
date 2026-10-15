@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { BallerApi, Me } from '../shared/api';
-import type { Command, DomainEvent, Perspective, Snapshot, UserRole } from '../shared/domain';
+import { PRIVATE_CONTEXTS, type Command, type DomainEvent, type Perspective, type Snapshot, type UserRole } from '../shared/domain';
 import { makeApi } from './api';
 
 interface Ctx {
@@ -31,7 +31,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (l: string, sec: string, pin?: boolean) => { try { const u = await api.login(l, sec, pin); await refresh(); setError(null); return u; } catch (e) { setError((e as Error).message); return null; } }, [api, refresh]);
   const signOut = useCallback(async () => { await api.logout(); setMe(null); await refresh(); }, [api, refresh]);
   const setDemoRole = useCallback((r: UserRole) => { localStorage.setItem('bc-demo-role', r); setDemoRoleState(r); }, []);
-  const v = useMemo(() => ({ s, mode: api.mode, api, me, ready, as, setDemoRole, run, upload, reset, refresh, signIn, signOut, error, setError, last, clearError: () => setError(null), dismiss: () => setLast(null) }), [s, api, me, ready, as, setDemoRole, run, upload, reset, refresh, signIn, signOut, error, last]);
+  // The demo engine holds one snapshot for every persona; the live server scopes it. A parent never gets a player's private notes in either.
+  const view = useMemo(() => (s && api.mode === 'demo' && as?.role === 'parent' ? { ...s, messages: s.messages.filter((m) => !PRIVATE_CONTEXTS.includes(m.context)) } : s), [s, api, as]);
+  const v = useMemo(() => ({ s: view, mode: api.mode, api, me, ready, as, setDemoRole, run, upload, reset, refresh, signIn, signOut, error, setError, last, clearError: () => setError(null), dismiss: () => setLast(null) }), [view, api, me, ready, as, setDemoRole, run, upload, reset, refresh, signIn, signOut, error, last]);
   return <C.Provider value={v}>{children}</C.Provider>;
 }
 // eslint-disable-next-line react-refresh/only-export-components
